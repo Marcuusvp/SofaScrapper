@@ -25,6 +25,7 @@ builder.Services.AddSingleton<SofaScraper>();
 
 // 4. Configurar DataManager (Scoped para usar o DbContext por requisição)
 builder.Services.AddScoped<DataManager>();
+builder.Services.AddLogging();
 
 var app = builder.Build();
 

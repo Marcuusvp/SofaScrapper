@@ -148,3 +148,14 @@ public class Player
     public string? Name { get; set; }
     public string? ShortName { get; set; }
 }
+
+public enum MatchProcessingStatus
+{
+    Pending = 0,      // Aguardando processamento
+    InProgress = 1,   // Jogo rolando (ignorar worker)
+    Enriched = 2,     // Sucesso completo
+    Postponed = 3,    // Adiado (ignorar temporariamente)
+    Cancelled = 4,    // Cancelado (ignorar permanentemente)
+    PartialData = 5,  // Dados parciais (falta algo)
+    Error = 99        // Falha no enriquecimento
+}

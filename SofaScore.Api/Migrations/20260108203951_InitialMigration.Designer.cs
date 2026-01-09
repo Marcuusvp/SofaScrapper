@@ -12,8 +12,8 @@ using SofaScore.Api.Data;
 namespace SofaScore.Api.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    [Migration("20260108192532_InitialCreate")]
-    partial class InitialCreate
+    [Migration("20260108203951_InitialMigration")]
+    partial class InitialMigration
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)
@@ -24,6 +24,46 @@ namespace SofaScore.Api.Migrations
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
+
+            modelBuilder.Entity("SofaScore.Api.Data.DbIncident", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<int>("AddedTime")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("AssistName")
+                        .HasColumnType("text");
+
+                    b.Property<string>("IncidentClass")
+                        .HasColumnType("text");
+
+                    b.Property<string>("IncidentType")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<bool>("IsHome")
+                        .HasColumnType("boolean");
+
+                    b.Property<int>("MatchId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("PlayerName")
+                        .HasColumnType("text");
+
+                    b.Property<int>("Time")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("MatchId");
+
+                    b.ToTable("Incidents");
+                });
 
             modelBuilder.Entity("SofaScore.Api.Data.DbMatch", b =>
                 {
@@ -111,6 +151,17 @@ namespace SofaScore.Api.Migrations
                     b.ToTable("MatchStats");
                 });
 
+            modelBuilder.Entity("SofaScore.Api.Data.DbIncident", b =>
+                {
+                    b.HasOne("SofaScore.Api.Data.DbMatch", "Match")
+                        .WithMany("Incidents")
+                        .HasForeignKey("MatchId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Match");
+                });
+
             modelBuilder.Entity("SofaScore.Api.Data.DbMatchStat", b =>
                 {
                     b.HasOne("SofaScore.Api.Data.DbMatch", "Match")
@@ -124,6 +175,8 @@ namespace SofaScore.Api.Migrations
 
             modelBuilder.Entity("SofaScore.Api.Data.DbMatch", b =>
                 {
+                    b.Navigation("Incidents");
+
                     b.Navigation("Stats");
                 });
 #pragma warning restore 612, 618
