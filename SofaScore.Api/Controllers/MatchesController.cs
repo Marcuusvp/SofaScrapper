@@ -49,11 +49,11 @@ public class MatchesController : ControllerBase
     }
 
     [HttpGet("{matchId}/details")]
-    public async Task<IActionResult> GetDetails(int matchId, [FromQuery] int? seasonId = null)
+    public async Task<IActionResult> GetDetails(int matchId)
     {
         try
         {
-            var data = await _dataManager.GetMatchFullDataAsync(matchId, seasonId);
+            var data = await _dataManager.GetMatchFullDataAsync(matchId);
             return Ok(data);
         }
         catch (Exception ex)

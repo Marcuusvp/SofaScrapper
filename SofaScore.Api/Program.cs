@@ -26,7 +26,7 @@ builder.Services.AddSingleton<SofaScraper>();
 // 4. Configurar DataManager (Scoped para usar o DbContext por requisição)
 builder.Services.AddScoped<DataManager>();
 builder.Services.AddLogging();
-
+builder.Services.AddHostedService<MatchEnrichmentWorker>();
 var app = builder.Build();
 
 // 5. Inicializações ao subir a API

@@ -90,4 +90,45 @@ public static class TournamentsInfo
             _ => throw new ArgumentException($"Campeonato '{tournament}' não encontrado")
         };
     }
+    // ✅ NOVO: Lista todos os torneios configurados
+    public static class AllTournaments
+    {
+        public static readonly List<(int tournamentId, int seasonId, int totalRounds, string name, string country)> List = new()
+        {
+            (PremierLeague.TournamentId, PremierLeague.SeasonId, PremierLeague.TotalRounds, PremierLeague.Name, PremierLeague.Country),
+            (LaLiga.TournamentId, LaLiga.SeasonId, LaLiga.TotalRounds, LaLiga.Name, LaLiga.Country),
+            (SerieA.TournamentId, SerieA.SeasonId, SerieA.TotalRounds, SerieA.Name, SerieA.Country),
+            (Ligue1.TournamentId, Ligue1.SeasonId, Ligue1.TotalRounds, Ligue1.Name, Ligue1.Country),
+            (Bundesliga.TournamentId, Bundesliga.SeasonId, Bundesliga.TotalRounds, Bundesliga.Name, Bundesliga.Country),
+            (Brasileirao.TournamentId, Brasileirao.SeasonId, Brasileirao.TotalRounds, Brasileirao.Name, Brasileirao.Country)
+        };
+    }
+    public static int? GetSeasonIdByTournament(int tournamentId)
+    {
+        return tournamentId switch
+        {
+            PremierLeague.TournamentId => PremierLeague.SeasonId,
+            LaLiga.TournamentId => LaLiga.SeasonId,
+            SerieA.TournamentId => SerieA.SeasonId,
+            Ligue1.TournamentId => Ligue1.SeasonId,
+            Bundesliga.TournamentId => Bundesliga.SeasonId,
+            Brasileirao.TournamentId => Brasileirao.SeasonId,
+            ChampionsLeague.TournamentId => ChampionsLeague.SeasonId,
+            _ => null
+        };
+    }
+    // ✅ NOVO: Busca TotalRounds pelo TournamentId
+    public static int? GetTotalRoundsByTournament(int tournamentId)
+    {
+        return tournamentId switch
+        {
+            PremierLeague.TournamentId => PremierLeague.TotalRounds,
+            LaLiga.TournamentId => LaLiga.TotalRounds,
+            SerieA.TournamentId => SerieA.TotalRounds,
+            Ligue1.TournamentId => Ligue1.TotalRounds,
+            Bundesliga.TournamentId => Bundesliga.TotalRounds,
+            Brasileirao.TournamentId => Brasileirao.TotalRounds,
+            _ => null
+        };
+    }
 }
