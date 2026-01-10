@@ -217,7 +217,8 @@ public class DataManager
         }
 
         // 2. Salva/atualiza cada jogo
-        int savedCount = 0;
+        int insertCount = 0;
+        int updateCount = 0;
         foreach (var match in matches)
         {
             var dbMatch = await _db.Matches.FindAsync(match.Id);
@@ -248,7 +249,7 @@ public class DataManager
                 };
                 
                 _db.Matches.Add(dbMatch);
-                savedCount++;
+                insertCount++;
             }
             else
             {
@@ -265,14 +266,15 @@ public class DataManager
                 }
                 
                 _db.Matches.Update(dbMatch);
+                updateCount++;
             }
         }
 
         await _db.SaveChangesAsync();
         
         _logger.LogInformation(
-            "Salvos/atualizados {Count} jogos da rodada {Round}",
-            savedCount, round
+            "Rodada {Round}: {Total} jogos ({Inserted} novos, {Updated} atualizados)",
+            round, matches.Count, insertCount, updateCount
         );
 
         return matches.Count;
