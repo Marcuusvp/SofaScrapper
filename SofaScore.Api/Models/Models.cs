@@ -159,3 +159,104 @@ public enum MatchProcessingStatus
     PartialData = 5,  // Dados parciais (falta algo)
     Error = 99        // Falha no enriquecimento
 }
+
+/// <summary>
+/// Análise de forma de um time (mandante ou visitante)
+/// </summary>
+public class TeamFormAnalysis
+{
+    public int GamesAnalyzed { get; set; }
+    public string Context { get; set; } = string.Empty; // Ex: "Últimos 5 jogos como mandante"
+    
+    public OffensiveMetrics Offensive { get; set; } = new();
+    public DefensiveMetrics Defensive { get; set; } = new();
+    public ResultMetrics Results { get; set; } = new();
+}
+
+public class OffensiveMetrics
+{
+    public double AvgGoalsScored { get; set; }
+    public double AvgShotsOnTarget { get; set; }
+    public int GoalsFirstHalf { get; set; }
+    public int GoalsSecondHalf { get; set; }
+    public int ScoredFirstCount { get; set; } // Quantas vezes marcou primeiro
+}
+
+public class DefensiveMetrics
+{
+    public double AvgGoalsConceded { get; set; }
+    public int CleanSheets { get; set; }
+    public int GoalsConcededFirstHalf { get; set; }
+    public int GoalsConcededSecondHalf { get; set; }
+    public int ConcededFirstCount { get; set; } // Quantas vezes sofreu primeiro
+}
+
+public class ResultMetrics
+{
+    public int Wins { get; set; }
+    public int Draws { get; set; }
+    public int Losses { get; set; }
+    
+    public double WinPercentage => GamesPlayed > 0 ? (Wins / (double)GamesPlayed) * 100 : 0;
+    public int GamesPlayed => Wins + Draws + Losses;
+}
+
+/// <summary>
+/// Predições para uma partida
+/// </summary>
+public class MatchPrediction
+{
+    public MatchInfo Match { get; set; } = new();
+    public TeamFormAnalysis HomeTeamAnalysis { get; set; } = new();
+    public TeamFormAnalysis AwayTeamAnalysis { get; set; } = new();
+    public PredictionResults Predictions { get; set; } = new();
+    
+    public string Confidence { get; set; } = "Low"; // High, Medium, Low
+    public List<string> Warnings { get; set; } = new();
+}
+
+public class MatchInfo
+{
+    public int Id { get; set; }
+    public string HomeTeam { get; set; } = string.Empty;
+    public string AwayTeam { get; set; } = string.Empty;
+    public string Tournament { get; set; } = string.Empty;
+    public int Round { get; set; }
+    public DateTime DateTime { get; set; }
+}
+
+public class PredictionResults
+{
+    public ResultPrediction Result { get; set; } = new();
+    public GoalsPrediction Goals { get; set; } = new();
+    public FirstGoalPrediction FirstGoal { get; set; } = new();
+    public HalfTimePrediction HalfTime { get; set; } = new();
+}
+
+public class ResultPrediction
+{
+    public int HomeWin { get; set; }
+    public int Draw { get; set; }
+    public int AwayWin { get; set; }
+}
+
+public class GoalsPrediction
+{
+    public int Over25 { get; set; }
+    public int Under25 { get; set; }
+    public int Btts { get; set; } // Both Teams To Score
+}
+
+public class FirstGoalPrediction
+{
+    public int HomeTeam { get; set; }
+    public int AwayTeam { get; set; }
+    public string Reasoning { get; set; } = string.Empty;
+}
+
+public class HalfTimePrediction
+{
+    public int HomeLeading { get; set; }
+    public int Draw { get; set; }
+    public int AwayLeading { get; set; }
+}

@@ -27,6 +27,14 @@ builder.Services.AddSingleton<SofaScraper>();
 builder.Services.AddScoped<DataManager>();
 builder.Services.AddLogging();
 builder.Services.AddHostedService<MatchEnrichmentWorker>();
+
+builder.Services.Configure<PredictionSettings>(
+    builder.Configuration.GetSection("PredictionSettings"));
+
+builder.Services.AddScoped<MatchDataFetcher>();
+builder.Services.AddScoped<StatsAnalyzer>();
+builder.Services.AddScoped<PredictionEngine>();
+builder.Services.AddScoped<MatchPredictionService>();
 var app = builder.Build();
 
 // 5. Inicializações ao subir a API
