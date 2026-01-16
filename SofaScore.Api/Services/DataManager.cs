@@ -165,7 +165,7 @@ public class DataManager
         }
 
         // 3. Busca incidentes
-        var incidents = await _scraper.GetMatchGoalsAsync(matchId);
+        var incidents = await _scraper.GetMatchIncidentsAsync(matchId);
         if (incidents != null)
         {
             foreach (var inc in incidents)

@@ -28,7 +28,8 @@ public class PredictionEngine
             Result = PredictResult(homeAnalysis, awayAnalysis),
             Goals = PredictGoals(homeAnalysis, awayAnalysis),
             FirstGoal = PredictFirstGoal(homeAnalysis, awayAnalysis),
-            HalfTime = PredictHalfTime(homeAnalysis, awayAnalysis)
+            HalfTime = PredictHalfTime(homeAnalysis, awayAnalysis),
+            Cards = PredictCards(homeAnalysis, awayAnalysis) // ✅ NOVO
         };
     }
 
@@ -265,6 +266,47 @@ public class PredictionEngine
             HomeLeading = homeLeading,
             Draw = draw,
             AwayLeading = awayLeading
+        };
+    }
+
+    /// <summary>
+    /// ✅ NOVO: Prediz cartões na partida
+    /// </summary>
+    private CardsPrediction PredictCards(
+        TeamFormAnalysis home,
+        TeamFormAnalysis away)
+    {
+        // Média combinada de cartões
+        double expectedCards = home.Discipline.AvgTotalCards + away.Discipline.AvgTotalCards;
+
+        // Probabilidade de over 3.5 cartões
+        int over35 = expectedCards switch
+        {
+            > 5.0 => 75,
+            > 4.5 => 65,
+            > 4.0 => 55,
+            > 3.5 => 50,
+            _ => 35
+        };
+
+        // Determina time mais disciplinado
+        string mostDisciplined = "Empate";
+        if (home.Discipline.AvgTotalCards < away.Discipline.AvgTotalCards - 0.5)
+            mostDisciplined = "Mandante";
+        else if (away.Discipline.AvgTotalCards < home.Discipline.AvgTotalCards - 0.5)
+            mostDisciplined = "Visitante";
+
+        _logger.LogDebug(
+            "Predição cartões: Esperado {Expected} | Over 3.5 = {Over}% | Mais disciplinado: {Team}",
+            expectedCards.ToString("F1"), over35, mostDisciplined
+        );
+
+        return new CardsPrediction
+        {
+            ExpectedTotalCards = Math.Round(expectedCards, 1),
+            Over35Cards = over35,
+            Under35Cards = 100 - over35,
+            MostDisciplinedTeam = mostDisciplined
         };
     }
 }

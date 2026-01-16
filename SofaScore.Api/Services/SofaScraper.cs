@@ -274,7 +274,7 @@ public class SofaScraper
         return JsonSerializer.Deserialize<StatisticsResponse>(json, options);
     }
 
-    public async Task<List<Incident>> GetMatchGoalsAsync(int eventId)
+    public async Task<List<Incident>> GetMatchIncidentsAsync(int eventId)
     {
         if (_page == null)
             throw new InvalidOperationException("Scraper não foi inicializado.");
@@ -297,11 +297,19 @@ public class SofaScraper
         var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
         var response = JsonSerializer.Deserialize<IncidentsResponse>(json, options);
 
-        // Retorna apenas incidentes do tipo "goal", ordenados por tempo
-        return response?.Incidents?
-            .Where(i => i.IncidentType == "goal")
-            .OrderBy(i => i.Time)
-            .ToList() ?? new List<Incident>();
+        //Retorna TODOS os incidentes (gols, cartões, substituições, etc.)
+    return response?.Incidents?
+        .OrderBy(i => i.Time)
+        .ThenBy(i => i.AddedTime)
+        .ToList() ?? new List<Incident>();
+    }
+    /// <summary>
+    /// ✅ MANTIDO: Método de conveniência para buscar apenas gols
+    /// </summary>
+    public async Task<List<Incident>> GetMatchGoalsAsync(int eventId)
+    {
+        var allIncidents = await GetMatchIncidentsAsync(eventId);
+        return allIncidents.Where(i => i.IncidentType == "goal").ToList();
     }
 
 }

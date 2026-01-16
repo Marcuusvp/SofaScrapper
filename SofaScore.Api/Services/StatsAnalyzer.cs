@@ -67,10 +67,14 @@ public class StatsAnalyzer
         analysis.Results.Draws = matches.Count(m => m.HomeScore == m.AwayScore);
         analysis.Results.Losses = matches.Count(m => m.HomeScore < m.AwayScore);
 
+        // ✅ NOVO: Métricas de Disciplina
+        analysis.Discipline = CalculateDisciplineMetrics(matches, isHome: true);
+
         _logger.LogInformation(
-            "Análise mandante {Team}: {Games} jogos, {Avg} gols/jogo, {Wins}V {Draws}E {Losses}D",
+            "Análise mandante {Team}: {Games} jogos, {Avg} gols/jogo, {Wins}V {Draws}E {Losses}D, {Cards} cartões/jogo",
             teamName, matches.Count, analysis.Offensive.AvgGoalsScored.ToString("F1"),
-            analysis.Results.Wins, analysis.Results.Draws, analysis.Results.Losses
+            analysis.Results.Wins, analysis.Results.Draws, analysis.Results.Losses,
+            analysis.Discipline.AvgTotalCards.ToString("F1")
         );
 
         return analysis;
@@ -128,10 +132,14 @@ public class StatsAnalyzer
         analysis.Results.Draws = matches.Count(m => m.AwayScore == m.HomeScore);
         analysis.Results.Losses = matches.Count(m => m.AwayScore < m.HomeScore);
 
+        // ✅ NOVO: Métricas de Disciplina
+        analysis.Discipline = CalculateDisciplineMetrics(matches, isHome: false);
+
         _logger.LogInformation(
-            "Análise visitante {Team}: {Games} jogos, {Avg} gols/jogo, {Wins}V {Draws}E {Losses}D",
+            "Análise visitante {Team}: {Games} jogos, {Avg} gols/jogo, {Wins}V {Draws}E {Losses}D, {Cards} cartões/jogo",
             teamName, matches.Count, analysis.Offensive.AvgGoalsScored.ToString("F1"),
-            analysis.Results.Wins, analysis.Results.Draws, analysis.Results.Losses
+            analysis.Results.Wins, analysis.Results.Draws, analysis.Results.Losses,
+            analysis.Discipline.AvgTotalCards.ToString("F1")
         );
 
         return analysis;
@@ -194,5 +202,45 @@ public class StatsAnalyzer
         if (firstGoal == null) return false;
 
         return firstGoal.IsHome != isHome;
+    }
+
+    /// <summary>
+    /// ✅ NOVO: Calcula métricas de disciplina (cartões e faltas)
+    /// </summary>
+    private DisciplineMetrics CalculateDisciplineMetrics(List<DbMatch> matches, bool isHome)
+    {
+        var metrics = new DisciplineMetrics();
+
+        foreach (var match in matches)
+        {
+            // Cartões amarelos
+            var yellowCards = match.Incidents.Count(i => 
+                i.IncidentType == "card" && 
+                i.IncidentClass == "yellow" && 
+                i.IsHome == isHome
+            );
+            metrics.TotalYellowCards += yellowCards;
+
+            // Cartões vermelhos
+            var redCards = match.Incidents.Count(i => 
+                i.IncidentType == "card" && 
+                i.IncidentClass == "red" && 
+                i.IsHome == isHome
+            );
+            metrics.TotalRedCards += redCards;
+        }
+
+        int gamesCount = matches.Count;
+        if (gamesCount > 0)
+        {
+            metrics.AvgYellowCards = metrics.TotalYellowCards / (double)gamesCount;
+            metrics.AvgRedCards = metrics.TotalRedCards / (double)gamesCount;
+            metrics.AvgTotalCards = (metrics.TotalYellowCards + metrics.TotalRedCards) / (double)gamesCount;
+        }
+
+        // Faltas (da estatística)
+        metrics.AvgFoulsCommitted = CalculateAvgStat(matches, "Fouls", isHome);
+
+        return metrics;
     }
 }

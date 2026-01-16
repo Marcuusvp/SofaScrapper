@@ -170,6 +170,7 @@ public class TeamFormAnalysis
     
     public OffensiveMetrics Offensive { get; set; } = new();
     public DefensiveMetrics Defensive { get; set; } = new();
+    public DisciplineMetrics Discipline { get; set; } = new(); // ✅ NOVO
     public ResultMetrics Results { get; set; } = new();
 }
 
@@ -231,6 +232,7 @@ public class PredictionResults
     public GoalsPrediction Goals { get; set; } = new();
     public FirstGoalPrediction FirstGoal { get; set; } = new();
     public HalfTimePrediction HalfTime { get; set; } = new();
+    public CardsPrediction Cards { get; set; } = new();
 }
 
 public class ResultPrediction
@@ -259,4 +261,28 @@ public class HalfTimePrediction
     public int HomeLeading { get; set; }
     public int Draw { get; set; }
     public int AwayLeading { get; set; }
+}
+
+/// <summary>
+/// Métricas de disciplina (cartões e faltas)
+/// </summary>
+public class DisciplineMetrics
+{
+    public double AvgYellowCards { get; set; }
+    public double AvgRedCards { get; set; }
+    public double AvgTotalCards { get; set; }
+    public double AvgFoulsCommitted { get; set; }
+    public int TotalYellowCards { get; set; }
+    public int TotalRedCards { get; set; }
+}
+
+/// <summary>
+/// Predição de cartões
+/// </summary>
+public class CardsPrediction
+{
+    public double ExpectedTotalCards { get; set; }
+    public int Over35Cards { get; set; } // Probabilidade de mais de 3.5 cartões
+    public int Under35Cards { get; set; }
+    public string MostDisciplinedTeam { get; set; } = string.Empty;
 }

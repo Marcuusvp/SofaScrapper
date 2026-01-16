@@ -9,6 +9,9 @@ public class MatchEnrichmentWorker : BackgroundService
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<MatchEnrichmentWorker> _logger;
     private readonly string _instanceId;
+    
+    // ✅ NOVO: Configuração de dias de antecedência
+    private const int DAYS_AHEAD_TO_CHECK = 5; // Não processar rodadas com jogos além de 5 dias
 
     public MatchEnrichmentWorker(
         IServiceProvider serviceProvider,
@@ -23,7 +26,7 @@ public class MatchEnrichmentWorker : BackgroundService
     {
         _logger.LogInformation("⚙️ Worker iniciado: {InstanceId}", _instanceId);
 
-        // Aguarda 30s antes de começar (dá tempo da API subir completamente)
+        // Aguarda 30s antes de começar
         await Task.Delay(TimeSpan.FromSeconds(30), stoppingToken);
 
         while (!stoppingToken.IsCancellationRequested)
@@ -47,7 +50,6 @@ public class MatchEnrichmentWorker : BackgroundService
     {
         _logger.LogInformation("🔄 Iniciando ciclo de processamento");
 
-        // Itera sobre todos os torneios configurados
         foreach (var tournament in TournamentsInfo.AllTournaments.List)
         {
             if (ct.IsCancellationRequested) break;
@@ -88,10 +90,13 @@ public class MatchEnrichmentWorker : BackgroundService
 
         _logger.LogInformation("🏆 Processando {Tournament}", tournamentName);
 
-        // Busca estados de todas as rodadas deste torneio em lote (otimização)
+        // Busca estados de todas as rodadas
         var roundStates = await db.RoundStates
             .Where(r => r.TournamentId == tournamentId && r.SeasonId == seasonId)
             .ToDictionaryAsync(r => r.Round, ct);
+
+        // ✅ NOVO: Variável para controlar quando parar de processar rodadas futuras
+        bool foundFutureRounds = false;
 
         for (int round = 1; round <= totalRounds; round++)
         {
@@ -100,11 +105,11 @@ public class MatchEnrichmentWorker : BackgroundService
             // Verifica se já foi processada
             if (roundStates.TryGetValue(round, out var state) && state.IsFullyProcessed)
             {
-                _logger.LogDebug("⏭️ Rodada {Round} já processada, pulando", round);
+                _logger.LogDebug("⭐ Rodada {Round} já processada, pulando", round);
                 continue;
             }
 
-            // Verifica lock (proteção contra múltiplas instâncias)
+            // Verifica lock
             if (state?.LockedAt != null && state.LockedBy != _instanceId)
             {
                 var lockAge = DateTime.UtcNow - state.LockedAt.Value;
@@ -114,7 +119,7 @@ public class MatchEnrichmentWorker : BackgroundService
                         "🔒 Rodada {Round} travada por {LockedBy}",
                         round, state.LockedBy
                     );
-                    continue; // Outra instância está processando
+                    continue;
                 }
                 else
                 {
@@ -123,6 +128,27 @@ public class MatchEnrichmentWorker : BackgroundService
                         round
                     );
                 }
+            }
+
+            // ✅ NOVO: Verifica se a rodada é muito no futuro ANTES de tentar processar
+            bool shouldProcess = await ShouldProcessRoundAsync(
+                db, 
+                tournamentId, 
+                seasonId, 
+                round, 
+                tournamentName,
+                ct
+            );
+
+            if (!shouldProcess)
+            {
+                foundFutureRounds = true;
+                _logger.LogInformation(
+                    "⏭️ Rodada {Round} está muito no futuro, pulando rodadas seguintes",
+                    round
+                );
+                // Se encontrou rodada futura, não precisa verificar as próximas
+                break;
             }
 
             await ProcessRoundAsync(
@@ -135,16 +161,87 @@ public class MatchEnrichmentWorker : BackgroundService
                 ct
             );
         }
+
+        if (foundFutureRounds)
+        {
+            _logger.LogInformation(
+                "✅ {Tournament} processado até rodada mais próxima",
+                tournamentName
+            );
+        }
+    }
+
+    /// <summary>
+    /// ✅ NOVO: Verifica se uma rodada deve ser processada baseado nas datas dos jogos
+    /// </summary>
+    private async Task<bool> ShouldProcessRoundAsync(
+        AppDbContext db,
+        int tournamentId,
+        int seasonId,
+        int round,
+        string tournamentName,
+        CancellationToken ct)
+    {
+        // 1. Busca jogos existentes dessa rodada no banco
+        var existingMatches = await db.Matches
+            .Where(m => 
+                m.TournamentId == tournamentId &&
+                m.SeasonId == seasonId &&
+                m.Round == round
+            )
+            .Select(m => new { m.StartTimestamp, m.Status })
+            .ToListAsync(ct);
+
+        if (!existingMatches.Any())
+        {
+            // Se não há jogos no banco, precisa buscar para saber
+            // Deixa processar para descobrir
+            return true;
+        }
+
+        // 2. Converte timestamps para DateTime
+        var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        var futureThreshold = DateTimeOffset.UtcNow.AddDays(DAYS_AHEAD_TO_CHECK).ToUnixTimeSeconds();
+
+        // 3. Verifica se TODOS os jogos estão muito no futuro
+        bool allMatchesTooFarInFuture = existingMatches.All(m => m.StartTimestamp > futureThreshold);
+
+        if (allMatchesTooFarInFuture)
+        {
+            var firstMatchDate = DateTimeOffset.FromUnixTimeSeconds(existingMatches.Min(m => m.StartTimestamp));
+            var daysUntil = (firstMatchDate - DateTimeOffset.UtcNow).Days;
+
+            _logger.LogDebug(
+                "📅 {Tournament} Rodada {Round}: Primeiro jogo em {Days} dias ({Date}) - muito longe para processar",
+                tournamentName, round, daysUntil, firstMatchDate.ToString("dd/MM/yyyy")
+            );
+
+            return false;
+        }
+
+        // 4. Verifica se há pelo menos um jogo próximo ou já acontecido
+        bool hasRecentOrPastMatches = existingMatches.Any(m => m.StartTimestamp <= futureThreshold);
+
+        if (hasRecentOrPastMatches)
+        {
+            _logger.LogDebug(
+                "✅ {Tournament} Rodada {Round}: Tem jogos próximos ou já aconteceram - processando",
+                tournamentName, round
+            );
+            return true;
+        }
+
+        return false;
     }
 
     private async Task ProcessRoundAsync(
-    AppDbContext db,
-    DataManager dataManager,
-    int tournamentId,
-    int seasonId,
-    int round,
-    string tournamentName,
-    CancellationToken ct)
+        AppDbContext db,
+        DataManager dataManager,
+        int tournamentId,
+        int seasonId,
+        int round,
+        string tournamentName,
+        CancellationToken ct)
     {
         _logger.LogInformation(
             "📋 Processando {Tournament} - Rodada {Round}",
@@ -208,7 +305,6 @@ public class MatchEnrichmentWorker : BackgroundService
                         match.Id, match.HomeTeam, match.AwayTeam
                     );
 
-                    // ✅ CORRIGIDO: Não passa seasonId (não existe mais)
                     await dataManager.GetMatchFullDataAsync(match.Id);
 
                     await Task.Delay(2000, ct);
@@ -223,7 +319,7 @@ public class MatchEnrichmentWorker : BackgroundService
                 }
             }
 
-            // ✅ CORRIGIDO: Recarrega do banco para pegar status atualizados
+            // Recarrega do banco
             matches = await db.Matches
                 .Where(m => m.TournamentId == tournamentId &&
                         m.SeasonId == seasonId &&
