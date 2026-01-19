@@ -28,14 +28,14 @@ public class SofaScraper
                 { 
                     "--no-sandbox", 
                     "--disable-setuid-sandbox",
-                    "--disable-blink-features=AutomationControlled",
+                    // "--disable-blink-features=AutomationControlled",
                     "--disable-dev-shm-usage",
-                    "--disable-gpu",
-                    "--disable-software-rasterizer",
-                    "--disable-extensions",
-                    "--no-first-run",
-                    "--no-zygote",
-                    "--single-process" // Importante para WSL
+                    // "--disable-gpu",
+                    // "--disable-software-rasterizer",
+                    // "--disable-extensions",
+                    // "--no-first-run",
+                    // "--no-zygote",
+                    // "--single-process" // Importante para WSL
                 }
             });
 
