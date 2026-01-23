@@ -7,82 +7,93 @@ public class SofaScraper
 {
     private IBrowser? _browser;
     private IPage? _page;
+        private readonly ILogger<SofaScraper>? _logger;
+        private readonly SemaphoreSlim _initLock = new(1, 1);
+        private DateTime _lastInitialization = DateTime.MinValue;
 
-    public async Task InitializeAsync()
+        //Configurações de resiliência
+        private const int MAX_RECONNECT_ATTEMPTS = 3;
+        private const int RECONNECT_DELAY_MS = 2000;
+        private const int SESSION_HEALTH_CHECK_MINUTES = 30;
+
+    public SofaScraper(ILogger<SofaScraper>? logger = null)
     {
+        _logger = logger;
+    }
+
+public async Task InitializeAsync()
+    {
+        await _initLock.WaitAsync();
         try
         {
-            Console.WriteLine("Baixando Chromium (se necessário)...");
-            
-            // Download do Chromium (primeira vez apenas)
+            // Fecha recursos antigos se existirem
+            await CleanupAsync();
+
+            _logger?.LogInformation("Baixando Chromium (se necessário)...");
+
             var browserFetcher = new BrowserFetcher();
-            
-            Console.WriteLine("Verificando instalação do Chromium...");
+
+            _logger?.LogInformation("Verificando instalação do Chromium...");
             await browserFetcher.DownloadAsync();
-            
-            Console.WriteLine("Iniciando navegador...");
+
+            _logger?.LogInformation("Iniciando navegador...");
             _browser = await Puppeteer.LaunchAsync(new LaunchOptions
             {
-                Headless = true, // DEVE ser true no WSL
+                Headless = true,
                 Args = new[] 
                 { 
                     "--no-sandbox", 
                     "--disable-setuid-sandbox",
-                    // "--disable-blink-features=AutomationControlled",
                     "--disable-dev-shm-usage",
-                    // "--disable-gpu",
-                    // "--disable-software-rasterizer",
-                    // "--disable-extensions",
-                    // "--no-first-run",
-                    // "--no-zygote",
-                    // "--single-process" // Importante para WSL
+                    "--disable-gpu",
+                    "--no-first-run",
+                    "--no-zygote"
                 }
             });
 
             _page = await _browser.NewPageAsync();
-            
-            // User agent realista
+
+            // ✅ NOVO: Configura timeout padrão mais alto
+            _page.DefaultTimeout = 60000; // 60 segundos
+
             await _page.SetUserAgentAsync(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36"
             );
-            
-            Console.WriteLine("Navegador iniciado com sucesso!");
+
+            _lastInitialization = DateTime.UtcNow;
+            _logger?.LogInformation("✅ Navegador iniciado com sucesso!");
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Erro ao inicializar: {ex.Message}");
-            Console.WriteLine($"Stack trace: {ex.StackTrace}");
+            _logger?.LogError(ex, "❌ Erro ao inicializar scraper");
             throw;
         }
+        finally
+        {
+            _initLock.Release();
+        }
     }
-
     public async Task<string> GetRoundEventsAsync(int tournamentId, int seasonId, int round)
     {
-        if (_page == null)
-            throw new InvalidOperationException("Scraper não foi inicializado. Chame InitializeAsync() primeiro.");
+        return await ExecuteWithRetryAsync(async () =>
+        {
+            await _page!.GoToAsync($"https://www.sofascore.com/pt/torneio/futebol/england/premier-league/{tournamentId}");
+            await Task.Delay(3000);
 
-        // Navegar para a página do torneio (estabelece sessão e cookies)
-        await _page.GoToAsync($"https://www.sofascore.com/pt/torneio/futebol/england/premier-league/{tournamentId}");
-        
-        // Aguardar página carregar
-        await Task.Delay(3000);
+            var apiUrl = $"https://www.sofascore.com/api/v1/unique-tournament/{tournamentId}/season/{seasonId}/events/round/{round}";
 
-        // Fazer a requisição via JavaScript do navegador
-        var apiUrl = $"https://www.sofascore.com/api/v1/unique-tournament/{tournamentId}/season/{seasonId}/events/round/{round}";
-        
-        var json = await _page.EvaluateFunctionAsync<string>(@"
-            async (url) => {
-                const response = await fetch(url, {
-                    headers: {
-                        'accept': '*/*',
-                        'x-requested-with': document.querySelector('meta[name=""x-requested-with""]')?.content || ''
-                    }
-                });
-                return await response.text();
-            }
-        ", apiUrl);
-
-        return json;
+            return await _page.EvaluateFunctionAsync<string>(@"
+                async (url) => {
+                    const response = await fetch(url, {
+                        headers: {
+                            'accept': '*/*',
+                            'x-requested-with': document.querySelector('meta[name=""x-requested-with""]')?.content || ''
+                        }
+                    });
+                    return await response.text();
+                }
+            ", apiUrl);
+        }, $"GetRoundEventsAsync({tournamentId}, {seasonId}, {round})");
     }
 
     public async Task<string> GetRoundEventsWithSlugAsync(int tournamentId, int seasonId, int round, string slug, string? prefix = null)
@@ -135,7 +146,7 @@ public class SofaScraper
             HomeScore = e.HomeScore?.Current,
             AwayScore = e.AwayScore?.Current,
             Status = e.Status?.Description ?? "N/A",
-            StartTime = DateTimeOffset.FromUnixTimeSeconds(e.StartTimestamp).DateTime
+            StartTime = DateTimeOffset.FromUnixTimeSeconds(e.StartTimestamp).UtcDateTime
         }).ToList() ?? new List<Match>();
     }
 
@@ -164,45 +175,44 @@ public class SofaScraper
 
     public async Task<List<Match>> GetLiveMatchesAsync()
     {
-        if (_page == null)
-            throw new InvalidOperationException("Scraper não foi inicializado.");
-
-        await _page.GoToAsync("https://www.sofascore.com/");
-        await Task.Delay(3000);
-
-        var apiUrl = "https://www.sofascore.com/api/v1/sport/football/events/live";
-        
-        var json = await _page.EvaluateFunctionAsync<string>(@"
-            async (url) => {
-                const response = await fetch(url, {
-                    headers: {
-                        'accept': '*/*',
-                        'x-requested-with': document.querySelector('meta[name=""x-requested-with""]')?.content || ''
-                    }
-                });
-                return await response.text();
-            }
-        ", apiUrl);
-
-        var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
-        var response = JsonSerializer.Deserialize<ApiResponse>(json, options);
-        
-        return response?.Events?.Select(e => new Match
+        return await ExecuteWithRetryAsync(async () =>
         {
-            Id = e.Id,
-            HomeTeam = e.HomeTeam?.Name ?? "N/A",
-            AwayTeam = e.AwayTeam?.Name ?? "N/A",
-            HomeScore = e.HomeScore?.Current,
-            AwayScore = e.AwayScore?.Current,
-            Status = e.Status?.Description ?? "N/A",
-            StartTime = DateTimeOffset.FromUnixTimeSeconds(e.StartTimestamp).DateTime
-        }).ToList() ?? new List<Match>();
+            await _page!.GoToAsync("https://www.sofascore.com/");
+            await Task.Delay(3000);
+
+            var apiUrl = "https://www.sofascore.com/api/v1/sport/football/events/live";
+
+            var json = await _page.EvaluateFunctionAsync<string>(@"
+                async (url) => {
+                    const response = await fetch(url, {
+                        headers: {
+                            'accept': '*/*',
+                            'x-requested-with': document.querySelector('meta[name=""x-requested-with""]')?.content || ''
+                        }
+                    });
+                    return await response.text();
+                }
+            ", apiUrl);
+
+            var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+            var response = JsonSerializer.Deserialize<ApiResponse>(json, options);
+
+            return response?.Events?.Select(e => new Match
+            {
+                Id = e.Id,
+                HomeTeam = e.HomeTeam?.Name ?? "N/A",
+                AwayTeam = e.AwayTeam?.Name ?? "N/A",
+                HomeScore = e.HomeScore?.Current,
+                AwayScore = e.AwayScore?.Current,
+                Status = e.Status?.Description ?? "N/A",
+                StartTime = DateTimeOffset.FromUnixTimeSeconds(e.StartTimestamp).UtcDateTime
+            }).ToList() ?? new List<Match>();
+        }, "GetLiveMatchesAsync");
     }
 
     public async Task DisposeAsync()
     {
-        if (_page != null) await _page.CloseAsync();
-        if (_browser != null) await _browser.CloseAsync();
+        await CleanupAsync();
     }
 
     public async Task<string> GetEventDetailsAsync(int eventId)
@@ -251,57 +261,77 @@ public class SofaScraper
 
     public async Task<EventDetail?> GetMatchDetailsAsync(int eventId)
     {
-        var json = await GetEventDetailsAsync(eventId);
-
-        var options = new JsonSerializerOptions
+        return await ExecuteWithRetryAsync(async () =>
         {
-            PropertyNameCaseInsensitive = true
-        };
+            var apiUrl = $"https://www.sofascore.com/api/v1/event/{eventId}";
 
-        var response = JsonSerializer.Deserialize<EventDetailResponse>(json, options);
-        return response?.Event;
+            var json = await _page!.EvaluateFunctionAsync<string>(@"
+                async (url) => {
+                    const response = await fetch(url, {
+                        headers: {
+                            'accept': '*/*',
+                            'x-requested-with': document.querySelector('meta[name=""x-requested-with""]')?.content || ''
+                        }
+                    });
+                    return await response.text();
+                }
+            ", apiUrl);
+
+            var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+            var response = JsonSerializer.Deserialize<EventDetailResponse>(json, options);
+            return response?.Event;
+        }, $"GetMatchDetailsAsync({eventId})");
     }
 
     public async Task<StatisticsResponse?> GetMatchStatisticsAsync(int eventId)
     {
-        var json = await GetEventStatisticsAsync(eventId);
-
-        var options = new JsonSerializerOptions
+        return await ExecuteWithRetryAsync(async () =>
         {
-            PropertyNameCaseInsensitive = true
-        };
+            var apiUrl = $"https://www.sofascore.com/api/v1/event/{eventId}/statistics";
 
-        return JsonSerializer.Deserialize<StatisticsResponse>(json, options);
+            var json = await _page!.EvaluateFunctionAsync<string>(@"
+                async (url) => {
+                    const response = await fetch(url, {
+                        headers: {
+                            'accept': '*/*',
+                            'x-requested-with': document.querySelector('meta[name=""x-requested-with""]')?.content || ''
+                        }
+                    });
+                    return await response.text();
+                }
+            ", apiUrl);
+
+            var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+            return JsonSerializer.Deserialize<StatisticsResponse>(json, options);
+        }, $"GetMatchStatisticsAsync({eventId})");
     }
 
     public async Task<List<Incident>> GetMatchIncidentsAsync(int eventId)
     {
-        if (_page == null)
-            throw new InvalidOperationException("Scraper não foi inicializado.");
+        return await ExecuteWithRetryAsync(async () =>
+        {
+            var apiUrl = $"https://www.sofascore.com/api/v1/event/{eventId}/incidents";
 
-        // URL específica de incidentes
-        var apiUrl = $"https://www.sofascore.com/api/v1/event/{eventId}/incidents";
+            var json = await _page!.EvaluateFunctionAsync<string>(@"
+                async (url) => {
+                    const response = await fetch(url, {
+                        headers: {
+                            'accept': '*/*',
+                            'x-requested-with': document.querySelector('meta[name=""x-requested-with""]')?.content || ''
+                        }
+                    });
+                    return await response.text();
+                }
+            ", apiUrl);
 
-        var json = await _page.EvaluateFunctionAsync<string>(@"
-            async (url) => {
-                const response = await fetch(url, {
-                    headers: {
-                        'accept': '*/*',
-                        'x-requested-with': document.querySelector('meta[name=""x-requested-with""]')?.content || ''
-                    }
-                });
-                return await response.text();
-            }
-        ", apiUrl);
+            var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+            var response = JsonSerializer.Deserialize<IncidentsResponse>(json, options);
 
-        var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
-        var response = JsonSerializer.Deserialize<IncidentsResponse>(json, options);
-
-        //Retorna TODOS os incidentes (gols, cartões, substituições, etc.)
-    return response?.Incidents?
-        .OrderBy(i => i.Time)
-        .ThenBy(i => i.AddedTime)
-        .ToList() ?? new List<Incident>();
+            return response?.Incidents?
+                .OrderBy(i => i.Time)
+                .ThenBy(i => i.AddedTime)
+                .ToList() ?? new List<Incident>();
+        }, $"GetMatchIncidentsAsync({eventId})");
     }
     /// <summary>
     /// ✅ MANTIDO: Método de conveniência para buscar apenas gols
@@ -310,6 +340,155 @@ public class SofaScraper
     {
         var allIncidents = await GetMatchIncidentsAsync(eventId);
         return allIncidents.Where(i => i.IncidentType == "goal").ToList();
+    }
+
+    /// <summary>
+    /// Verifica se a sessão está saudável
+    /// </summary>
+    private async Task<bool> IsSessionHealthyAsync()
+    {
+        try
+        {
+            // Verifica se os objetos existem
+            if (_browser == null || _page == null)
+            {
+                _logger?.LogWarning("⚠️ Browser ou Page é null");
+                return false;
+            }
+
+            // Verifica se o browser ainda está conectado
+            if (!_browser.IsConnected)
+            {
+                _logger?.LogWarning("⚠️ Browser desconectado");
+                return false;
+            }
+
+            // Verifica se a página ainda está válida (tenta uma operação simples)
+            var _ = await _page.EvaluateExpressionAsync<string>("'health-check'");
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "⚠️ Health check falhou");
+            return false;
+        }
+    }
+    /// <summary>
+    /// Garante que a sessão está válida, reconectando se necessário
+    /// </summary>
+    private async Task EnsureSessionAsync()
+    {
+        // Se não foi inicializado ainda, inicializa
+        if (_browser == null || _page == null)
+        {
+            _logger?.LogInformation("🔄 Primeira inicialização do scraper");
+            await InitializeAsync();
+            return;
+        }
+
+        // Se a sessão parece estar OK, retorna
+        if (await IsSessionHealthyAsync())
+        {
+            // Verifica se passou muito tempo desde a última inicialização
+            var timeSinceInit = DateTime.UtcNow - _lastInitialization;
+            if (timeSinceInit.TotalMinutes > SESSION_HEALTH_CHECK_MINUTES)
+            {
+                _logger?.LogInformation("🔄 Reiniciando sessão preventivamente após {Minutes} minutos", 
+                    timeSinceInit.TotalMinutes);
+                await InitializeAsync();
+            }
+            return;
+        }
+
+        // Sessão está inválida, tenta reconectar
+        _logger?.LogWarning("🔄 Sessão inválida detectada, reconectando...");
+
+        for (int attempt = 1; attempt <= MAX_RECONNECT_ATTEMPTS; attempt++)
+        {
+            try
+            {
+                await InitializeAsync();
+
+                if (await IsSessionHealthyAsync())
+                {
+                    _logger?.LogInformation("✅ Reconexão bem-sucedida na tentativa {Attempt}", attempt);
+                    return;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogError(ex, "❌ Falha na tentativa {Attempt} de reconexão", attempt);
+
+                if (attempt < MAX_RECONNECT_ATTEMPTS)
+                {
+                    await Task.Delay(RECONNECT_DELAY_MS * attempt);
+                }
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"Falha ao reconectar após {MAX_RECONNECT_ATTEMPTS} tentativas"
+        );
+    }
+
+    /// <summary>
+    /// Wrapper para executar operações com retry
+    /// </summary>
+    private async Task<T> ExecuteWithRetryAsync<T>(
+        Func<Task<T>> operation, 
+        string operationName)
+    {
+        for (int attempt = 1; attempt <= MAX_RECONNECT_ATTEMPTS; attempt++)
+        {
+            try
+            {
+                await EnsureSessionAsync();
+                return await operation();
+            }
+            catch (Exception ex) when (attempt < MAX_RECONNECT_ATTEMPTS)
+            {
+                _logger?.LogWarning(ex, 
+                    "⚠️ {Operation} falhou na tentativa {Attempt}, tentando reconectar...",
+                    operationName, attempt);
+
+                // Força reinicialização
+                await InitializeAsync();
+                await Task.Delay(RECONNECT_DELAY_MS);
+            }
+        }
+
+        // Última tentativa sem catch
+        await EnsureSessionAsync();
+        return await operation();
+    }
+    private async Task CleanupAsync()
+    {
+        try
+        {
+            if (_page != null)
+            {
+                await _page.CloseAsync();
+                _page = null;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Erro ao fechar página");
+        }
+
+        try
+        {
+            if (_browser != null)
+            {
+                await _browser.CloseAsync();
+                _browser = null;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Erro ao fechar browser");
+        }
     }
 
 }

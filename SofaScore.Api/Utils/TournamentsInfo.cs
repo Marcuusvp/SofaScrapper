@@ -100,7 +100,8 @@ public static class TournamentsInfo
             (SerieA.TournamentId, SerieA.SeasonId, SerieA.TotalRounds, SerieA.Name, SerieA.Country),
             (Ligue1.TournamentId, Ligue1.SeasonId, Ligue1.TotalRounds, Ligue1.Name, Ligue1.Country),
             (Bundesliga.TournamentId, Bundesliga.SeasonId, Bundesliga.TotalRounds, Bundesliga.Name, Bundesliga.Country),
-            (Brasileirao.TournamentId, Brasileirao.SeasonId, Brasileirao.TotalRounds, Brasileirao.Name, Brasileirao.Country)
+            (Brasileirao.TournamentId, Brasileirao.SeasonId, Brasileirao.TotalRounds, Brasileirao.Name, Brasileirao.Country),
+            (ChampionsLeague.TournamentId, ChampionsLeague.SeasonId, 13, ChampionsLeague.Name, "Europa")
         };
     }
     public static int? GetSeasonIdByTournament(int tournamentId)

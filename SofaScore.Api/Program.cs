@@ -35,6 +35,11 @@ builder.Services.AddScoped<MatchDataFetcher>();
 builder.Services.AddScoped<StatsAnalyzer>();
 builder.Services.AddScoped<PredictionEngine>();
 builder.Services.AddScoped<MatchPredictionService>();
+builder.Services.AddSingleton<SofaScraper>(sp =>
+{
+    var logger = sp.GetRequiredService<ILogger<SofaScraper>>();
+    return new SofaScraper(logger);
+});
 var app = builder.Build();
 
 // 5. Inicializações ao subir a API

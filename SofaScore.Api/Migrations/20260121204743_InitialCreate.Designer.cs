@@ -12,8 +12,8 @@ using SofaScore.Api.Data;
 namespace SofaScore.Api.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    [Migration("20260108203951_InitialMigration")]
-    partial class InitialMigration
+    [Migration("20260121204743_InitialCreate")]
+    partial class InitialCreate
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)
@@ -80,12 +80,24 @@ namespace SofaScore.Api.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<int>("EnrichmentAttempts")
+                        .HasColumnType("integer");
+
                     b.Property<int>("HomeScore")
                         .HasColumnType("integer");
 
                     b.Property<string>("HomeTeam")
                         .IsRequired()
                         .HasColumnType("text");
+
+                    b.Property<DateTime?>("LastEnrichmentAttempt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("LastEnrichmentError")
+                        .HasColumnType("text");
+
+                    b.Property<int>("ProcessingStatus")
+                        .HasColumnType("integer");
 
                     b.Property<string>("Referee")
                         .HasColumnType("text");
@@ -110,6 +122,8 @@ namespace SofaScore.Api.Migrations
                         .HasColumnType("integer");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("TournamentId", "Round", "ProcessingStatus");
 
                     b.ToTable("Matches");
                 });
@@ -149,6 +163,69 @@ namespace SofaScore.Api.Migrations
                     b.HasIndex("MatchId");
 
                     b.ToTable("MatchStats");
+                });
+
+            modelBuilder.Entity("SofaScore.Api.Data.DbRoundState", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<int>("CancelledMatches")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime?>("CompletedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("EnrichedMatches")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("FailedAttempts")
+                        .HasColumnType("integer");
+
+                    b.Property<bool>("IsFullyProcessed")
+                        .HasColumnType("boolean");
+
+                    b.Property<DateTime>("LastCheck")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("LastError")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime?>("LockedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("LockedBy")
+                        .HasColumnType("text");
+
+                    b.Property<int>("PostponedMatches")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("Round")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("SeasonId")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("TotalMatches")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("TournamentId")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("IsFullyProcessed", "LastCheck");
+
+                    b.HasIndex("TournamentId", "SeasonId", "Round")
+                        .IsUnique();
+
+                    b.ToTable("RoundStates");
                 });
 
             modelBuilder.Entity("SofaScore.Api.Data.DbIncident", b =>

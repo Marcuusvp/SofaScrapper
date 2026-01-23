@@ -56,7 +56,10 @@ public class DataManager
         dbMatch.AwayScore = details.AwayScore?.Display ?? 0;
         dbMatch.Status = details.Status?.Description ?? "Unknown";
         dbMatch.StartTimestamp = details.StartTimestamp;
-        dbMatch.TournamentId = details.Tournament?.Id ?? 0;
+        if (dbMatch.TournamentId == 0)
+        {
+            dbMatch.TournamentId = details.Tournament?.Id ?? 0;
+        }
         dbMatch.Round = details.RoundInfo?.Round ?? 0;
         dbMatch.SeasonId = seasonId;
 
