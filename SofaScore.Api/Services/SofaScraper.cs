@@ -7,14 +7,15 @@ public class SofaScraper
 {
     private IBrowser? _browser;
     private IPage? _page;
-        private readonly ILogger<SofaScraper>? _logger;
-        private readonly SemaphoreSlim _initLock = new(1, 1);
-        private DateTime _lastInitialization = DateTime.MinValue;
+    private readonly SemaphoreSlim _pageSemaphore = new(3, 3); // Máx 3 páginas simultâneas
+    private readonly ILogger<SofaScraper>? _logger;
+    private readonly SemaphoreSlim _initLock = new(1, 1);
+    private DateTime _lastInitialization = DateTime.MinValue;
 
-        //Configurações de resiliência
-        private const int MAX_RECONNECT_ATTEMPTS = 3;
-        private const int RECONNECT_DELAY_MS = 2000;
-        private const int SESSION_HEALTH_CHECK_MINUTES = 30;
+    //Configurações de resiliência
+    private const int MAX_RECONNECT_ATTEMPTS = 3;
+    private const int RECONNECT_DELAY_MS = 2000;
+    private const int SESSION_HEALTH_CHECK_MINUTES = 30;
 
     public SofaScraper(ILogger<SofaScraper>? logger = null)
     {
@@ -75,7 +76,7 @@ public async Task InitializeAsync()
     }
     public async Task<string> GetRoundEventsAsync(int tournamentId, int seasonId, int round)
     {
-        return await ExecuteWithRetryAsync(async () =>
+        return await ExecuteWithRetryAsync(async (page) =>
         {
             await _page!.GoToAsync($"https://www.sofascore.com/pt/torneio/futebol/england/premier-league/{tournamentId}");
             await Task.Delay(3000);
@@ -175,7 +176,7 @@ public async Task InitializeAsync()
 
     public async Task<List<Match>> GetLiveMatchesAsync()
     {
-        return await ExecuteWithRetryAsync(async () =>
+        return await ExecuteWithRetryAsync(async (page) =>
         {
             await _page!.GoToAsync("https://www.sofascore.com/");
             await Task.Delay(3000);
@@ -261,7 +262,7 @@ public async Task InitializeAsync()
 
     public async Task<EventDetail?> GetMatchDetailsAsync(int eventId)
     {
-        return await ExecuteWithRetryAsync(async () =>
+        return await ExecuteWithRetryAsync(async (page) =>
         {
             var apiUrl = $"https://www.sofascore.com/api/v1/event/{eventId}";
 
@@ -285,7 +286,7 @@ public async Task InitializeAsync()
 
     public async Task<StatisticsResponse?> GetMatchStatisticsAsync(int eventId)
     {
-        return await ExecuteWithRetryAsync(async () =>
+        return await ExecuteWithRetryAsync(async (page) =>
         {
             var apiUrl = $"https://www.sofascore.com/api/v1/event/{eventId}/statistics";
 
@@ -308,7 +309,7 @@ public async Task InitializeAsync()
 
     public async Task<List<Incident>> GetMatchIncidentsAsync(int eventId)
     {
-        return await ExecuteWithRetryAsync(async () =>
+        return await ExecuteWithRetryAsync(async (page) =>
         {
             var apiUrl = $"https://www.sofascore.com/api/v1/event/{eventId}/incidents";
 
@@ -436,15 +437,26 @@ public async Task InitializeAsync()
     /// Wrapper para executar operações com retry
     /// </summary>
     private async Task<T> ExecuteWithRetryAsync<T>(
-        Func<Task<T>> operation, 
+        Func<IPage, Task<T>> operation, 
         string operationName)
     {
         for (int attempt = 1; attempt <= MAX_RECONNECT_ATTEMPTS; attempt++)
         {
+            await _pageSemaphore.WaitAsync();
+            IPage? page = null;
+            
             try
             {
                 await EnsureSessionAsync();
-                return await operation();
+                
+                // Cria uma página dedicada para esta operação
+                page = await _browser!.NewPageAsync();
+                page.DefaultTimeout = 60000;
+                await page.SetUserAgentAsync(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                );
+
+                return await operation(page);
             }
             catch (Exception ex) when (attempt < MAX_RECONNECT_ATTEMPTS)
             {
@@ -452,15 +464,38 @@ public async Task InitializeAsync()
                     "⚠️ {Operation} falhou na tentativa {Attempt}, tentando reconectar...",
                     operationName, attempt);
 
-                // Força reinicialização
-                await InitializeAsync();
                 await Task.Delay(RECONNECT_DELAY_MS);
+            }
+            finally
+            {
+                if (page != null)
+                {
+                    try { await page.CloseAsync(); } 
+                    catch { /* ignora */ }
+                }
+                _pageSemaphore.Release();
             }
         }
 
-        // Última tentativa sem catch
-        await EnsureSessionAsync();
-        return await operation();
+        // Última tentativa
+        await _pageSemaphore.WaitAsync();
+        IPage? finalPage = null;
+        try
+        {
+            await EnsureSessionAsync();
+            finalPage = await _browser!.NewPageAsync();
+            finalPage.DefaultTimeout = 60000;
+            return await operation(finalPage);
+        }
+        finally
+        {
+            if (finalPage != null)
+            {
+                try { await finalPage.CloseAsync(); } 
+                catch { /* ignora */ }
+            }
+            _pageSemaphore.Release();
+        }
     }
     private async Task CleanupAsync()
     {
@@ -489,6 +524,38 @@ public async Task InitializeAsync()
         {
             _logger?.LogWarning(ex, "Erro ao fechar browser");
         }
+    }
+
+    // Adicione dentro da classe SofaScraper
+
+    public async Task<StandingsTable?> GetStandingsAsync(int tournamentId, int seasonId)
+    {
+        // Reutiliza a lógica de retry e sessão
+        return await ExecuteWithRetryAsync(async (page) =>
+        {
+            // Navega para a página do torneio para garantir cookies válidos
+            await page.GoToAsync($"https://www.sofascore.com/");
+            
+            var apiUrl = $"https://www.sofascore.com/api/v1/unique-tournament/{tournamentId}/season/{seasonId}/standings/total";
+
+            var json = await _page.EvaluateFunctionAsync<string>(@"
+                async (url) => {
+                    const response = await fetch(url, {
+                        headers: {
+                            'accept': '*/*',
+                            'x-requested-with': document.querySelector('meta[name=""x-requested-with""]')?.content || ''
+                        }
+                    });
+                    return await response.text();
+                }
+            ", apiUrl);
+
+            var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+            var response = JsonSerializer.Deserialize<StandingsResponse>(json, options);
+            
+            // Retorna a tabela 'total' (geralmente a primeira)
+            return response?.Standings?.FirstOrDefault(s => s.Type == "total");
+        }, $"GetStandingsAsync({tournamentId})");
     }
 
 }

@@ -286,3 +286,35 @@ public class CardsPrediction
     public int Under35Cards { get; set; }
     public string MostDisciplinedTeam { get; set; } = string.Empty;
 }
+public class StandingsResponse
+{
+    public List<StandingsTable>? Standings { get; set; }
+}
+
+public class StandingsTable
+{
+    public Tournament? Tournament { get; set; } // Agora é um objeto
+    public string? Type { get; set; }
+    public List<StandingRow>? Rows { get; set; }
+}
+
+public class StandingRow
+{
+    public Team? Team { get; set; }
+    public int Position { get; set; }
+    public int Matches { get; set; }
+    public int Wins { get; set; }
+    public int Draws { get; set; }
+    public int Losses { get; set; }
+    public int ScoresFor { get; set; }      // Corrigido para int
+    public int ScoresAgainst { get; set; }  // Corrigido para int
+    public int Points { get; set; }
+    public string? ScoreDiffFormatted { get; set; }
+    public Promotion? Promotion { get; set; } // Corrigido para Objeto Promotion
+}
+
+public class Promotion
+{
+    public string? Text { get; set; }
+    public int Id { get; set; }
+}

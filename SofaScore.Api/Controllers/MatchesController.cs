@@ -117,4 +117,19 @@ public class MatchesController : ControllerBase
             return BadRequest(new { error = ex.Message });
         }
     }
+
+    [HttpGet("tournament/{tournamentName}/standings")]
+    public async Task<IActionResult> GetStandings(string tournamentName)
+    {
+        try 
+        {
+            var info = TournamentsInfo.GetTournamentInfo(tournamentName);
+            var standings = await _scraper.GetStandingsAsync(info.tournamentId, info.seasonId);
+            return Ok(standings);
+        }
+        catch (Exception ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
 }
