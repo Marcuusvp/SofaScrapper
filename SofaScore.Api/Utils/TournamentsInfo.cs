@@ -87,6 +87,7 @@ public static class TournamentsInfo
             "ligue1" => (Ligue1.TournamentId, Ligue1.SeasonId, Ligue1.TotalRounds, Ligue1.Name),
             "bundesliga" => (Bundesliga.TournamentId, Bundesliga.SeasonId, Bundesliga.TotalRounds, Bundesliga.Name),
             "brasileirao" => (Brasileirao.TournamentId, Brasileirao.SeasonId, Brasileirao.TotalRounds, Brasileirao.Name),
+            "championsleague" => (ChampionsLeague.TournamentId, ChampionsLeague.SeasonId, 13, ChampionsLeague.Name),
             _ => throw new ArgumentException($"Campeonato '{tournament}' não encontrado")
         };
     }
