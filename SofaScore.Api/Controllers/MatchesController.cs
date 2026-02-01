@@ -1,4 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using SofaScore.Shared.Data;
 using SofaScore.Shared.Services;
 using SofaScoreScraper;
 
@@ -10,18 +12,40 @@ public class MatchesController : ControllerBase
 {
     private readonly SofaScraper _scraper;
     private readonly DataManager _dataManager;
+    private readonly AppDbContext _db;
 
-    public MatchesController(SofaScraper scraper, DataManager dataManager)
+    public MatchesController(SofaScraper scraper, DataManager dataManager, AppDbContext db)
     {
         _scraper = scraper;
         _dataManager = dataManager;
+        _db = db;
     }
 
-    [HttpGet("live")]
+[HttpGet("live")]
     public async Task<IActionResult> GetLive()
     {
-        var matches = await _scraper.GetLiveMatchesAsync();
-        return Ok(matches);
+        // Define uma janela de segurança: Jogos que começaram nas últimas 5 horas.
+        // Jogos mais antigos que isso com status "Ao Vivo" são considerados lixo/erro.
+        var safetyCutoff = DateTimeOffset.UtcNow.AddHours(-5).ToUnixTimeSeconds();
+
+        var liveMatches = await _db.Matches
+            .Where(m => 
+                // 1. Deve ter começado recentemente
+                m.StartTimestamp >= safetyCutoff && 
+                
+                // 2. E ter status de jogo em andamento
+                (m.ProcessingStatus == MatchProcessingStatus.InProgress 
+                 || m.Status == "Live" 
+                 || m.Status == "Inplay"
+                 || m.Status == "1st half"
+                 || m.Status == "2nd half"
+                 || m.Status == "Halftime"
+                 || m.Status == "Extra time"
+                 || m.Status == "Penalties"))
+            .OrderBy(m => m.StartTimestamp)
+            .ToListAsync();
+
+        return Ok(liveMatches);
     }
 
     [HttpGet("tournament/{tournamentName}/round/{round}")]

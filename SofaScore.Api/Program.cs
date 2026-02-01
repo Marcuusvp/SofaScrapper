@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using SofaScore.Shared.Data;
 using SofaScore.Shared.Services;
 
+
 var builder = WebApplication.CreateBuilder(args);
 
 // 1. Configurar Serviços
@@ -49,11 +50,6 @@ using (var scope = app.Services.CreateScope())
     var context = services.GetRequiredService<AppDbContext>();
     await context.Database.EnsureCreatedAsync();
     Console.WriteLine("✅ Banco de dados conectado/criado.");
-
-    // B. Baixar Chromium e iniciar Scraper
-    var scraper = services.GetRequiredService<SofaScraper>();
-    await scraper.InitializeAsync();
-    Console.WriteLine("✅ Scraper inicializado.");
 }
 
 // 6. Middleware Pipeline
