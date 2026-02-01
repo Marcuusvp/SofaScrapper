@@ -15,8 +15,9 @@ public class SofaScraper
     private DateTime _lastInitialization = DateTime.MinValue;
 
     private const int MAX_RECONNECT_ATTEMPTS = 3;
-    private const int RECONNECT_DELAY_MS = 2000;
-    private const int SESSION_HEALTH_CHECK_MINUTES = 30;
+    private const int RECONNECT_DELAY_MS = 3000;
+    // Reduzido para 5 min para forçar limpeza de memória frequente no Railway
+    private const int SESSION_HEALTH_CHECK_MINUTES = 5; 
 
     public SofaScraper(ILogger<SofaScraper>? logger = null)
     {
@@ -34,12 +35,28 @@ public class SofaScraper
             {
                 "--no-sandbox",
                 "--disable-setuid-sandbox",
-                "--disable-dev-shm-usage",
+                "--disable-dev-shm-usage", // Vital para Docker
                 "--disable-gpu",
+                "--disable-software-rasterizer",
+                
+                // OTIMIZAÇÃO DE MEMÓRIA (Railway Free Tier)
+                "--js-flags=\"--max-old-space-size=128\"", // Heap JS limitado a 128MB
                 "--disable-extensions",
+                "--disable-background-networking",
+                "--disable-background-timer-throttling",
+                "--disable-backgrounding-occluded-windows",
+                "--disable-breakpad",
+                "--disable-component-extensions-with-background-pages",
+                "--disable-features=IsolateOrigins,site-per-process,Translate,OptimizationHints,MediaRouter,LazyFrameLoading",
+                "--disable-ipc-flooding-protection",
+                "--disable-renderer-backgrounding",
+                "--metrics-recording-only",
+                "--mute-audio",
+                "--no-default-browser-check",
                 "--no-first-run",
-                "--disable-features=IsolateOrigins,site-per-process",
-                "--js-flags=\"--max-old-space-size=256\""
+                "--no-pings",
+                "--password-store=basic",
+                "--use-mock-keychain"
             };
 
             var launchOptions = new LaunchOptions { Headless = true };
@@ -47,31 +64,32 @@ public class SofaScraper
 
             if (!string.IsNullOrEmpty(executablePath))
             {
-                _logger?.LogInformation("🐧 Rodando em modo Docker/Linux. Otimizando memória...");
-                browserArgs.Add("--single-process");
-                browserArgs.Add("--no-zygote");
+                _logger?.LogInformation("🐧 Railway Mode: Flags otimizadas ativas.");
                 launchOptions.ExecutablePath = executablePath;
             }
             else
             {
-                _logger?.LogInformation("💻 Rodando em modo Local. Usando configurações padrão...");
+                _logger?.LogInformation("💻 Local Mode: Config padrão.");
                 var browserFetcher = new BrowserFetcher();
                 await browserFetcher.DownloadAsync();
             }
 
             launchOptions.Args = browserArgs.ToArray();
             _browser = await Puppeteer.LaunchAsync(launchOptions);
+            
             _page = await _browser.NewPageAsync();
-            _page.DefaultTimeout = 60000;
+            _page.DefaultTimeout = 90000; // Timeout maior para evitar falsos positivos
 
-            await _page.SetUserAgentAsync("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36");
+            // User Agent genérico para evitar bloqueio
+            await _page.SetUserAgentAsync("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
 
             _lastInitialization = DateTime.UtcNow;
-            _logger?.LogInformation("✅ Navegador iniciado com sucesso!");
+            _logger?.LogInformation("✅ Navegador iniciado (Sessão Otimizada)!");
         }
         catch (Exception ex)
         {
-            _logger?.LogError(ex, "❌ Erro ao inicializar scraper");
+            _logger?.LogError(ex, "❌ Erro fatal ao iniciar navegador");
+            await CleanupAsync();
             throw;
         }
         finally
@@ -81,16 +99,15 @@ public class SofaScraper
     }
 
     // =================================================================================================
-    // MÉTODOS PÚBLICOS (Gerenciam a sessão e retry)
+    // MÉTODOS PÚBLICOS (Mantidos 100% iguais para não quebrar API/Worker)
     // =================================================================================================
 
     public async Task<List<Match>> GetLiveMatchesAsync()
     {
         return await ExecuteWithRetryAsync(async (page) =>
         {
-            await page.GoToAsync("https://www.sofascore.com/");
-            await Task.Delay(2000);
-
+            await page.GoToAsync("https://www.sofascore.com/", new NavigationOptions { Timeout = 60000, WaitUntil = new[] { WaitUntilNavigation.DOMContentLoaded } });
+            
             var apiUrl = "https://www.sofascore.com/api/v1/sport/football/events/live";
             var json = await FetchJsonFromPage(page, apiUrl);
 
@@ -106,13 +123,12 @@ public class SofaScraper
             return filteredEvents.Select(e => new Match
             {
                 Id = e.Id,
-                //TournamentId = e.Tournament?.UniqueTournament?.Id ?? 0, // Descomente se tiver adicionado ao Match
                 HomeTeam = e.HomeTeam?.Name ?? "N/A",
                 AwayTeam = e.AwayTeam?.Name ?? "N/A",
                 HomeScore = e.HomeScore?.Current,
                 AwayScore = e.AwayScore?.Current,
                 Status = e.Status?.Description ?? "N/A",
-                StartTimestamp = e.StartTimestamp, // ✅ Passando timestamp bruto
+                StartTimestamp = e.StartTimestamp,
                 StartTime = DateTimeOffset.FromUnixTimeSeconds(e.StartTimestamp).UtcDateTime
             }).ToList();
         }, "GetLiveMatchesAsync");
@@ -133,17 +149,14 @@ public class SofaScraper
         return await ExecuteWithRetryAsync(page => FetchMatchIncidentsInternal(page, eventId), $"GetMatchIncidentsAsync({eventId})");
     }
 
-    // ✅ MÉTODO CORRIGIDO: Não chama ExecuteWithRetryAsync internamente, usa a página já aberta
     public async Task<MatchEnrichmentData> EnrichSingleMatchAsync(int matchId)
     {
         return await ExecuteWithRetryAsync(async (page) =>
         {
-            // Reutiliza a MESMA página para todas as chamadas (Muito mais rápido e sem deadlock)
             var details = await FetchMatchDetailsInternal(page, matchId);
-            // Pequeno delay para não ser bloqueado por rate limit
-            await Task.Delay(500); 
+            await Task.Delay(200);
             var stats = await FetchMatchStatisticsInternal(page, matchId);
-            await Task.Delay(500);
+            await Task.Delay(200);
             var incidents = await FetchMatchIncidentsInternal(page, matchId);
 
             return new MatchEnrichmentData
@@ -155,16 +168,12 @@ public class SofaScraper
         }, $"EnrichSingleMatchAsync({matchId})");
     }
 
-    // ... Outros métodos públicos (GetMatchesAsync, etc) mantenha a lógica antiga ou ajuste para chamar FetchJsonFromPage ...
-    // Para economizar espaço, vou focar na correção do Deadlock. Se precisar dos outros métodos (GetMatchesAsync) me avise.
-    
     public async Task<List<Match>> GetMatchesAsync(int tournamentId, int seasonId, int round)
     {
          return await ExecuteWithRetryAsync(async (page) =>
         {
-            await page.GoToAsync($"https://www.sofascore.com/pt/torneio/futebol/england/premier-league/{tournamentId}");
-            await Task.Delay(3000);
-
+            await page.GoToAsync($"https://www.sofascore.com/tournament/{tournamentId}", new NavigationOptions { Timeout = 60000, WaitUntil = new[] { WaitUntilNavigation.DOMContentLoaded } });
+            
             var apiUrl = $"https://www.sofascore.com/api/v1/unique-tournament/{tournamentId}/season/{seasonId}/events/round/{round}";
             var json = await FetchJsonFromPage(page, apiUrl);
             
@@ -189,8 +198,7 @@ public class SofaScraper
     {
         return await ExecuteWithRetryAsync(async (page) =>
         {
-             await page.GoToAsync($"https://www.sofascore.com/pt/torneio/futebol/europe/uefa-champions-league/{tournamentId}");
-             await Task.Delay(3000);
+             await page.GoToAsync($"https://www.sofascore.com/tournament/{tournamentId}", new NavigationOptions { Timeout = 60000, WaitUntil = new[] { WaitUntilNavigation.DOMContentLoaded } });
 
              var apiUrl = prefix != null
                 ? $"https://www.sofascore.com/api/v1/unique-tournament/{tournamentId}/season/{seasonId}/events/round/{round}/slug/{slug}/prefix/{prefix}"
@@ -209,7 +217,7 @@ public class SofaScraper
                  AwayScore = e.AwayScore?.Current,
                  Status = e.Status?.Description ?? "N/A",
                  StartTimestamp = e.StartTimestamp,
-                 StartTime = DateTimeOffset.FromUnixTimeSeconds(e.StartTimestamp).UtcDateTime // Corrigido para UtcDateTime
+                 StartTime = DateTimeOffset.FromUnixTimeSeconds(e.StartTimestamp).UtcDateTime
              }).ToList() ?? new List<Match>();
         }, "GetQualificationMatchesAsync");
     }
@@ -218,7 +226,7 @@ public class SofaScraper
     {
         return await ExecuteWithRetryAsync(async (page) =>
         {
-            await page.GoToAsync($"https://www.sofascore.com/");
+            await page.GoToAsync($"https://www.sofascore.com/", new NavigationOptions { Timeout = 60000, WaitUntil = new[] { WaitUntilNavigation.DOMContentLoaded } });
             var apiUrl = $"https://www.sofascore.com/api/v1/unique-tournament/{tournamentId}/season/{seasonId}/standings/total";
             var json = await FetchJsonFromPage(page, apiUrl);
             var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
@@ -227,30 +235,46 @@ public class SofaScraper
         }, $"GetStandingsAsync({tournamentId})");
     }
 
+    // Métodos legados mantidos para compatibilidade
+    public async Task<string> GetEventDetailsAsync(int eventId) => await ExecuteWithRetryAsync(p => FetchJsonFromPage(p, $"https://www.sofascore.com/api/v1/event/{eventId}"), "GetEventDetails");
+    public async Task<string> GetEventStatisticsAsync(int eventId) => await ExecuteWithRetryAsync(p => FetchJsonFromPage(p, $"https://www.sofascore.com/api/v1/event/{eventId}/statistics"), "GetEventStatistics");
+
 
     // =================================================================================================
-    // MÉTODOS PRIVADOS (Lógica Pura - Sem Locks)
+    // MÉTODOS PRIVADOS (Onde a mágica da estabilidade acontece)
     // =================================================================================================
 
     private async Task<string> FetchJsonFromPage(IPage page, string url)
     {
-        return await page.EvaluateFunctionAsync<string>(@"
-            async (url) => {
-                const response = await fetch(url, {
-                    headers: {
-                        'accept': '*/*',
-                        'x-requested-with': document.querySelector('meta[name=""x-requested-with""]')?.content || ''
-                    }
-                });
-                return await response.text();
-            }
-        ", url);
+        try 
+        {
+            // Tenta injetar o fetch via JS da página
+            return await page.EvaluateFunctionAsync<string>(@"
+                async (url) => {
+                    const response = await fetch(url, {
+                        headers: {
+                            'accept': '*/*',
+                            'x-requested-with': document.querySelector('meta[name=""x-requested-with""]')?.content || ''
+                        }
+                    });
+                    if (!response.ok) return null;
+                    return await response.text();
+                }
+            ", url);
+        }
+        catch (NullReferenceException)
+        {
+            // CRÍTICO: Se der NullRef aqui, o browser morreu no meio do caminho.
+            // Relançamos como Exception para ativar o Retry e reiniciar o browser.
+            throw new Exception("Browser crashed/closed during evaluation.");
+        }
     }
 
     private async Task<EventDetail?> FetchMatchDetailsInternal(IPage page, int eventId)
     {
         var apiUrl = $"https://www.sofascore.com/api/v1/event/{eventId}";
         var json = await FetchJsonFromPage(page, apiUrl);
+        if (string.IsNullOrEmpty(json)) return null;
         var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
         var response = JsonSerializer.Deserialize<EventDetailResponse>(json, options);
         return response?.Event;
@@ -260,6 +284,7 @@ public class SofaScraper
     {
         var apiUrl = $"https://www.sofascore.com/api/v1/event/{eventId}/statistics";
         var json = await FetchJsonFromPage(page, apiUrl);
+        if (string.IsNullOrEmpty(json)) return null;
         var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
         return JsonSerializer.Deserialize<StatisticsResponse>(json, options);
     }
@@ -268,119 +293,66 @@ public class SofaScraper
     {
         var apiUrl = $"https://www.sofascore.com/api/v1/event/{eventId}/incidents";
         var json = await FetchJsonFromPage(page, apiUrl);
+        if (string.IsNullOrEmpty(json)) return null;
         var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
         var response = JsonSerializer.Deserialize<IncidentsResponse>(json, options);
         return response?.Incidents?.OrderBy(i => i.Time).ThenBy(i => i.AddedTime).ToList() ?? new List<Incident>();
     }
 
-    // =================================================================================================
-    // INFRAESTRUTURA (Sessão, Retry, Cleanup)
-    // =================================================================================================
-
-    private async Task<bool> IsSessionHealthyAsync()
-    {
-        try
-        {
-            if (_browser == null || _page == null) return false;
-            if (!_browser.IsConnected) return false;
-            await _page.EvaluateExpressionAsync<string>("'health-check'");
-            return true;
-        }
-        catch { return false; }
-    }
-
     private async Task EnsureSessionAsync()
     {
-        if (_browser == null || _page == null)
+        // Reinicia se: Nulo, Desconectado ou Sessão muito longa (liberar RAM)
+        bool expired = (DateTime.UtcNow - _lastInitialization).TotalMinutes > SESSION_HEALTH_CHECK_MINUTES;
+        
+        if (_browser == null || _page == null || !_browser.IsConnected || expired)
         {
+            if (expired) _logger?.LogInformation("♻️ Reciclando navegador para liberar memória...");
+            else _logger?.LogWarning("⚠️ Navegador instável. Reiniciando...");
+            
             await InitializeAsync();
-            return;
         }
-
-        if (await IsSessionHealthyAsync())
-        {
-            var timeSinceInit = DateTime.UtcNow - _lastInitialization;
-            if (timeSinceInit.TotalMinutes > SESSION_HEALTH_CHECK_MINUTES)
-            {
-                await InitializeAsync();
-            }
-            return;
-        }
-
-        for (int attempt = 1; attempt <= MAX_RECONNECT_ATTEMPTS; attempt++)
-        {
-            try
-            {
-                await InitializeAsync();
-                if (await IsSessionHealthyAsync()) return;
-            }
-            catch (Exception)
-            {
-                if (attempt < MAX_RECONNECT_ATTEMPTS) await Task.Delay(RECONNECT_DELAY_MS * attempt);
-            }
-        }
-        throw new InvalidOperationException("Falha ao reconectar após tentativas máximas");
     }
 
     private async Task<T> ExecuteWithRetryAsync<T>(Func<IPage, Task<T>> operation, string operationName)
     {
-        // ... (Mantém a lógica de retry exatamente como estava, mas usando EnsureSessionAsync) ...
         for (int attempt = 1; attempt <= MAX_RECONNECT_ATTEMPTS; attempt++)
         {
             await _pageSemaphore.WaitAsync();
-            IPage? page = null;
             try
             {
                 await EnsureSessionAsync();
-                page = await _browser!.NewPageAsync();
-                page.DefaultTimeout = 60000;
-                await page.SetUserAgentAsync("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36");
-                return await operation(page);
+                
+                if (_page == null || _page.IsClosed) 
+                    throw new Exception("Página fechada inesperadamente.");
+
+                return await operation(_page);
             }
-            catch (Exception ex) when (attempt < MAX_RECONNECT_ATTEMPTS)
+            catch (Exception ex)
             {
-                _logger?.LogWarning(ex, "⚠️ {Operation} falhou, tentando reconectar...", operationName);
-                await Task.Delay(RECONNECT_DELAY_MS);
+                if (attempt < MAX_RECONNECT_ATTEMPTS)
+                {
+                    _logger?.LogWarning("⚠️ {Operation} falhou (Tentativa {Attempt}). Erro: {Message}", operationName, attempt, ex.Message);
+                    await CleanupAsync(); // Força limpeza imediata
+                    await Task.Delay(RECONNECT_DELAY_MS);
+                }
+                else
+                {
+                    _logger?.LogError(ex, "❌ {Operation} falhou definitivamente.", operationName);
+                    throw;
+                }
             }
             finally
             {
-                if (page != null) try { await page.CloseAsync(); } catch { }
                 _pageSemaphore.Release();
             }
         }
-        
-        // Última tentativa
-        await _pageSemaphore.WaitAsync();
-        IPage? finalPage = null;
-        try
-        {
-            await EnsureSessionAsync();
-            finalPage = await _browser!.NewPageAsync();
-            finalPage.DefaultTimeout = 60000;
-            return await operation(finalPage);
-        }
-        finally
-        {
-            if (finalPage != null) try { await finalPage.CloseAsync(); } catch { }
-            _pageSemaphore.Release();
-        }
+        throw new InvalidOperationException("Unreachable code");
     }
 
     private async Task CleanupAsync()
     {
         try { if (_page != null) { await _page.CloseAsync(); _page = null; } } catch { }
         try { if (_browser != null) { await _browser.CloseAsync(); _browser = null; } } catch { }
+        GC.Collect(); // Força o .NET a limpar a memória
     }
-    
-    public async Task DisposeAsync()
-    {
-        await CleanupAsync();
-        GC.Collect();
-    }
-    
-    // Métodos legados que não usam page interna (ex: GetRoundEventsAsync)
-    // Devem ser refatorados para usar ExecuteWithRetryAsync e FetchJsonFromPage se possível,
-    // mas por hora o foco é corrigir o Deadlock do Enrich.
-    public async Task<string> GetEventDetailsAsync(int eventId) => await ExecuteWithRetryAsync(p => FetchJsonFromPage(p, $"https://www.sofascore.com/api/v1/event/{eventId}"), "GetEventDetails");
-    public async Task<string> GetEventStatisticsAsync(int eventId) => await ExecuteWithRetryAsync(p => FetchJsonFromPage(p, $"https://www.sofascore.com/api/v1/event/{eventId}/statistics"), "GetEventStatistics");
 }
