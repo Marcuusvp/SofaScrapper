@@ -1,6 +1,7 @@
+using Microsoft.Extensions.Logging;
 using SofaScoreScraper;
 
-namespace SofaScore.Api.Services;
+namespace SofaScore.Shared.Services;
 
 /// <summary>
 /// Motor de predição - gera probabilidades baseadas em análises de forma

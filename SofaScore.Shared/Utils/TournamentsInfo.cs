@@ -133,4 +133,14 @@ public static class TournamentsInfo
             _ => null
         };
     }
+    public static readonly HashSet<int> MonitoredIds = new()
+    {
+        PremierLeague.TournamentId,
+        LaLiga.TournamentId,
+        SerieA.TournamentId,
+        Ligue1.TournamentId,
+        Bundesliga.TournamentId,
+        Brasileirao.TournamentId,
+        ChampionsLeague.TournamentId
+    };
 }

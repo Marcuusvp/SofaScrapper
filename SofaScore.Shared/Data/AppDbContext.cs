@@ -2,7 +2,7 @@ using System.ComponentModel.DataAnnotations.Schema;
 using Microsoft.EntityFrameworkCore;
 using SofaScoreScraper;
 
-namespace SofaScore.Api.Data;
+namespace SofaScore.Shared.Data;
 
 public class AppDbContext : DbContext
 {

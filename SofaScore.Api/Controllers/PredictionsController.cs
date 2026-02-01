@@ -1,5 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
-using SofaScore.Api.Services;
+using SofaScore.Shared.Services;
 
 namespace SofaScore.Api.Controllers;
 

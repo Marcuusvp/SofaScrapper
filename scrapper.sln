@@ -1,8 +1,12 @@
-Microsoft Visual Studio Solution File, Format Version 12.00
+﻿Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.5.2.0
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SofaScore.Api", "SofaScore.Api\SofaScore.Api.csproj", "{66119C7C-50F0-683C-F535-BC88E30A1736}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SofaScore.Shared", "SofaScore.Shared\SofaScore.Shared.csproj", "{1D9A75E1-CE90-46CB-ADB4-DFC2B5F1756D}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SofaScore.Worker", "SofaScore.Worker\SofaScore.Worker.csproj", "{C90EB596-7A29-4467-82E0-EE7DB100C73E}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -14,6 +18,14 @@ Global
 		{66119C7C-50F0-683C-F535-BC88E30A1736}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{66119C7C-50F0-683C-F535-BC88E30A1736}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{66119C7C-50F0-683C-F535-BC88E30A1736}.Release|Any CPU.Build.0 = Release|Any CPU
+		{1D9A75E1-CE90-46CB-ADB4-DFC2B5F1756D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{1D9A75E1-CE90-46CB-ADB4-DFC2B5F1756D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{1D9A75E1-CE90-46CB-ADB4-DFC2B5F1756D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{1D9A75E1-CE90-46CB-ADB4-DFC2B5F1756D}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C90EB596-7A29-4467-82E0-EE7DB100C73E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C90EB596-7A29-4467-82E0-EE7DB100C73E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C90EB596-7A29-4467-82E0-EE7DB100C73E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C90EB596-7A29-4467-82E0-EE7DB100C73E}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

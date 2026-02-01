@@ -1,7 +1,8 @@
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using SofaScoreScraper;
 
-namespace SofaScore.Api.Services;
+namespace SofaScore.Shared.Services;
 
 /// <summary>
 /// Serviço principal de predição de partidas

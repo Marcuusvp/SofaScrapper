@@ -1,7 +1,8 @@
-using SofaScore.Api.Data;
+using Microsoft.Extensions.Logging;
+using SofaScore.Shared.Data;
 using SofaScoreScraper;
 
-namespace SofaScore.Api.Services;
+namespace SofaScore.Shared.Services;
 
 /// <summary>
 /// Analisa estatísticas de partidas e calcula métricas

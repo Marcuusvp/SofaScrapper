@@ -1,8 +1,9 @@
 using Microsoft.EntityFrameworkCore;
-using SofaScore.Api.Data;
+using Microsoft.Extensions.Logging;
+using SofaScore.Shared.Data;
 using SofaScoreScraper;
 
-namespace SofaScore.Api.Services;
+namespace SofaScore.Shared.Services;
 
 public class DataManager
 {
@@ -244,7 +245,7 @@ public class DataManager
                     HomeScore = match.HomeScore ?? 0,
                     AwayScore = match.AwayScore ?? 0,
                     Status = match.Status,
-                    StartTimestamp = new DateTimeOffset(match.StartTime).ToUnixTimeSeconds(),
+                    StartTimestamp = match.StartTimestamp,
                     ProcessingStatus = match.Status switch
                     {
                         "Live" or "Inplay" => MatchProcessingStatus.InProgress,
@@ -264,7 +265,7 @@ public class DataManager
                 dbMatch.HomeScore = match.HomeScore ?? 0;
                 dbMatch.AwayScore = match.AwayScore ?? 0;
                 dbMatch.Status = match.Status;
-                
+                dbMatch.StartTimestamp = match.StartTimestamp;
                 // Atualiza status de processamento
                 if (dbMatch.Status is "Ended" or "Finished" && 
                     dbMatch.ProcessingStatus == MatchProcessingStatus.InProgress)

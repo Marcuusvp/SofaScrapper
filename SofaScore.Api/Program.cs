@@ -1,8 +1,7 @@
 using System.Text.Json.Serialization;
 using Microsoft.EntityFrameworkCore;
-using SofaScore.Api.Data;
-using SofaScore.Api.Services;
-using SofaScoreScraper;
+using SofaScore.Shared.Data;
+using SofaScore.Shared.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -25,7 +24,6 @@ builder.Services.AddScoped<SofaScraper>();
 // 4. Configurar DataManager (Scoped para usar o DbContext por requisição)
 builder.Services.AddScoped<DataManager>();
 builder.Services.AddLogging();
-builder.Services.AddHostedService<MatchEnrichmentWorker>();
 
 builder.Services.Configure<PredictionSettings>(
     builder.Configuration.GetSection("PredictionSettings"));

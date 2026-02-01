@@ -15,8 +15,17 @@ public class Event
     public Score? AwayScore { get; set; }
     public Status? Status { get; set; }
     public long StartTimestamp { get; set; }
+    public EventTournament? Tournament { get; set; }
 }
-
+public class EventTournament
+{
+    public string? Name { get; set; }
+    public UniqueTournament? UniqueTournament { get; set; }
+}
+public class UniqueTournament
+{
+    public int? Id { get; set; }
+}
 public class Team
 {
     public string? Name { get; set; }
@@ -47,6 +56,8 @@ public class Match
     public int? AwayScore { get; set; }
     public string Status { get; set; } = string.Empty;
     public DateTime StartTime { get; set; }
+    public long StartTimestamp { get; set; }
+    public int TournamentId { get; set; }
 }
 
 // Modelo para detalhes completos do evento

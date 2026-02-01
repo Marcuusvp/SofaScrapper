@@ -1,8 +1,9 @@
 using Microsoft.EntityFrameworkCore;
-using SofaScore.Api.Data;
+using Microsoft.Extensions.Logging;
+using SofaScore.Shared.Data;
 using SofaScoreScraper;
 
-namespace SofaScore.Api.Services;
+namespace SofaScore.Shared.Services;
 
 /// <summary>
 /// Responsável por buscar dados históricos de partidas para análise
