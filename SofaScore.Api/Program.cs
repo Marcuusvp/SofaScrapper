@@ -20,8 +20,7 @@ var connectionString = builder.Configuration.GetConnectionString("DefaultConnect
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseNpgsql(connectionString));
 
-// 3. Configurar Scraper (Singleton para manter navegador aberto)
-builder.Services.AddSingleton<SofaScraper>();
+builder.Services.AddScoped<SofaScraper>();
 
 // 4. Configurar DataManager (Scoped para usar o DbContext por requisição)
 builder.Services.AddScoped<DataManager>();
@@ -35,7 +34,7 @@ builder.Services.AddScoped<MatchDataFetcher>();
 builder.Services.AddScoped<StatsAnalyzer>();
 builder.Services.AddScoped<PredictionEngine>();
 builder.Services.AddScoped<MatchPredictionService>();
-builder.Services.AddSingleton<SofaScraper>(sp =>
+builder.Services.AddScoped<SofaScraper>(sp =>
 {
     var logger = sp.GetRequiredService<ILogger<SofaScraper>>();
     return new SofaScraper(logger);

@@ -7,7 +7,7 @@ public class SofaScraper
 {
     private IBrowser? _browser;
     private IPage? _page;
-    private readonly SemaphoreSlim _pageSemaphore = new(3, 3); // Máx 3 páginas simultâneas
+    private readonly SemaphoreSlim _pageSemaphore = new(1, 1); // Máx 1 páginas simultâneas
     private readonly ILogger<SofaScraper>? _logger;
     private readonly SemaphoreSlim _initLock = new(1, 1);
     private DateTime _lastInitialization = DateTime.MinValue;
@@ -47,8 +47,12 @@ public async Task InitializeAsync()
                     "--disable-setuid-sandbox",
                     "--disable-dev-shm-usage",
                     "--disable-gpu",
+                    "--disable-extensions",
                     "--no-first-run",
-                    "--no-zygote"
+                    "--no-zygote",
+                    "--single-process",
+                    "--disable-features=IsolateOrigins,site-per-process",
+                    "--js-flags=\"--max-old-space-size=256\""
                 }
             });
 
@@ -214,6 +218,10 @@ public async Task InitializeAsync()
     public async Task DisposeAsync()
     {
         await CleanupAsync();
+
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
     }
 
     public async Task<string> GetEventDetailsAsync(int eventId)
@@ -556,6 +564,24 @@ public async Task InitializeAsync()
             // Retorna a tabela 'total' (geralmente a primeira)
             return response?.Standings?.FirstOrDefault(s => s.Type == "total");
         }, $"GetStandingsAsync({tournamentId})");
+    }
+
+    public async Task<MatchEnrichmentData> EnrichSingleMatchAsync(int matchId)
+    {
+        return await ExecuteWithRetryAsync(async (page) =>
+        {
+            // Busca tudo sequencialmente na mesma página
+            var details = await GetMatchDetailsAsync(matchId);
+            var stats = await GetMatchStatisticsAsync(matchId);
+            var incidents = await GetMatchIncidentsAsync(matchId);
+
+            return new MatchEnrichmentData
+            {
+                Details = details,
+                Statistics = stats,
+                Incidents = incidents
+            };
+        }, $"EnrichSingleMatchAsync({matchId})");
     }
 
 }

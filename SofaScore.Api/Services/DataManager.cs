@@ -17,7 +17,11 @@ public class DataManager
         _logger = logger;
     }
 
-    // ✅ CORRIGIDO: Removido parâmetro seasonId opcional
+    /// <summary>
+    /// ⚠️ DEPRECADO para uso do Worker
+    /// Use MatchEnrichmentWorker para enriquecimento automático
+    /// Este método continua disponível para endpoints da API
+    /// </summary>
     public async Task<object?> GetMatchFullDataAsync(int matchId)
     {
         var existingMatch = await _db.Matches
@@ -72,10 +76,10 @@ public class DataManager
             _ => MatchProcessingStatus.Pending
         };
 
-        if (details.Status?.Description is "Ended" or "Finished")
-        {
-            await EnrichMatchDataAsync(dbMatch, matchId);
-        }
+        // if (details.Status?.Description is "Ended" or "Finished")
+        // {
+        //     await EnrichMatchDataAsync(dbMatch, matchId);
+        // }
 
         if (existingMatch == null)
         {

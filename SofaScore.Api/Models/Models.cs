@@ -318,3 +318,10 @@ public class Promotion
     public string? Text { get; set; }
     public int Id { get; set; }
 }
+
+public class MatchEnrichmentData
+{
+    public EventDetail? Details { get; set; }
+    public StatisticsResponse? Statistics { get; set; }
+    public List<Incident>? Incidents { get; set; }
+}
