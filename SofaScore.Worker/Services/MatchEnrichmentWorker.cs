@@ -9,7 +9,7 @@ public class MatchEnrichmentWorker : BackgroundService
 {
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<MatchEnrichmentWorker> _logger;
-    private readonly TimeSpan _cycleDelay = TimeSpan.FromMinutes(1);
+    private readonly TimeSpan _cycleDelay = TimeSpan.FromMinutes(3);
 
     public MatchEnrichmentWorker(IServiceProvider serviceProvider, ILogger<MatchEnrichmentWorker> logger)
     {
@@ -83,7 +83,7 @@ public class MatchEnrichmentWorker : BackgroundService
                     var activeMatches = await dbContext.Matches
                         .Where(m => m.ProcessingStatus == MatchProcessingStatus.InProgress)
                         .OrderBy(m => m.LastEnrichmentAttempt)
-                        .Take(3)
+                        .Take(1)
                         .ToListAsync(stoppingToken);
 
                     if (activeMatches.Any())

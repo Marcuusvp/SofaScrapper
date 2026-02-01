@@ -13,11 +13,12 @@ public class SofaScraper
     private readonly ILogger<SofaScraper>? _logger;
     private readonly SemaphoreSlim _initLock = new(1, 1);
     private DateTime _lastInitialization = DateTime.MinValue;
-
+    private int _operationsSinceInit = 0;
+    private const int MAX_OPERATIONS_PER_SESSION = 10;
     private const int MAX_RECONNECT_ATTEMPTS = 3;
     private const int RECONNECT_DELAY_MS = 3000;
     // Reduzido para 5 min para forçar limpeza de memória frequente no Railway
-    private const int SESSION_HEALTH_CHECK_MINUTES = 5; 
+    private const int SESSION_HEALTH_CHECK_MINUTES = 2; 
 
     public SofaScraper(ILogger<SofaScraper>? logger = null)
     {
@@ -33,30 +34,54 @@ public class SofaScraper
 
             var browserArgs = new List<string>
             {
+                // CRÍTICO: Força single-process (evita criar múltiplos processos Chrome)
+                "--single-process",
+                
+                // Segurança (obrigatório em containers)
                 "--no-sandbox",
                 "--disable-setuid-sandbox",
-                "--disable-dev-shm-usage", // Vital para Docker
+                
+                // Memória compartilhada (Docker)
+                "--disable-dev-shm-usage",
+                
+                // GPU/Renderização
                 "--disable-gpu",
                 "--disable-software-rasterizer",
                 
-                // OTIMIZAÇÃO DE MEMÓRIA (Railway Free Tier)
-                "--js-flags=\"--max-old-space-size=128\"", // Heap JS limitado a 128MB
+                // JavaScript Engine (CRÍTICO - reduz heap V8)
+                "--js-flags=--max-old-space-size=96", // 96MB ao invés de 128MB
+                
+                // Limitação de processos
+                "--renderer-process-limit=1", // Apenas 1 renderer
+                "--disable-dev-tools",
+                
+                // Desabilitar recursos desnecessários
                 "--disable-extensions",
                 "--disable-background-networking",
                 "--disable-background-timer-throttling",
                 "--disable-backgrounding-occluded-windows",
                 "--disable-breakpad",
                 "--disable-component-extensions-with-background-pages",
-                "--disable-features=IsolateOrigins,site-per-process,Translate,OptimizationHints,MediaRouter,LazyFrameLoading",
+                "--disable-default-apps",
+                "--disable-features=IsolateOrigins,site-per-process,Translate,OptimizationHints,MediaRouter,LazyFrameLoading,AudioServiceOutOfProcess,CalculateNativeWinOcclusion",
+                "--disable-hang-monitor",
                 "--disable-ipc-flooding-protection",
+                "--disable-popup-blocking",
+                "--disable-prompt-on-repost",
                 "--disable-renderer-backgrounding",
+                "--disable-sync",
+                "--disable-web-security", // OK para scraping interno
+                "--force-color-profile=srgb",
                 "--metrics-recording-only",
                 "--mute-audio",
                 "--no-default-browser-check",
                 "--no-first-run",
                 "--no-pings",
                 "--password-store=basic",
-                "--use-mock-keychain"
+                "--use-mock-keychain",
+                "--memory-pressure-off", // Ignora avisos de memória baixa
+                "--disk-cache-size=1", // Cache mínimo
+                "--media-cache-size=1"
             };
 
             var launchOptions = new LaunchOptions { Headless = true };
@@ -303,13 +328,19 @@ public class SofaScraper
     {
         // Reinicia se: Nulo, Desconectado ou Sessão muito longa (liberar RAM)
         bool expired = (DateTime.UtcNow - _lastInitialization).TotalMinutes > SESSION_HEALTH_CHECK_MINUTES;
+        bool tooManyOps = _operationsSinceInit >= MAX_OPERATIONS_PER_SESSION;
         
-        if (_browser == null || _page == null || !_browser.IsConnected || expired)
+        if (_browser == null || _page == null || !_browser.IsConnected || expired || tooManyOps)
         {
-            if (expired) _logger?.LogInformation("♻️ Reciclando navegador para liberar memória...");
-            else _logger?.LogWarning("⚠️ Navegador instável. Reiniciando...");
+            if (tooManyOps) 
+                _logger?.LogInformation("♻️ Limite de operações atingido. Reiniciando navegador...");
+            else if (expired) 
+                _logger?.LogInformation("♻️ Reciclando navegador para liberar memória...");
+            else 
+                _logger?.LogWarning("⚠️ Navegador instável. Reiniciando...");
             
             await InitializeAsync();
+            _operationsSinceInit = 0; // RESET
         }
     }
 
@@ -324,7 +355,9 @@ public class SofaScraper
                 
                 if (_page == null || _page.IsClosed) 
                     throw new Exception("Página fechada inesperadamente.");
-
+                
+                _operationsSinceInit++; // ← ADICIONAR ESTA LINHA
+                
                 return await operation(_page);
             }
             catch (Exception ex)

@@ -1,28 +1,8 @@
-# Estágio de Build
-FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
-WORKDIR /src
-
-# Copia os projetos (assumindo contexto na raiz do repo)
-COPY ["SofaScore.Shared/SofaScore.Shared.csproj", "SofaScore.Shared/"]
-COPY ["SofaScore.Worker/SofaScore.Worker.csproj", "SofaScore.Worker/"]
-
-# Restaura dependências
-RUN dotnet restore "SofaScore.Worker/SofaScore.Worker.csproj"
-
-# Copia todo o código fonte
-COPY . .
-
-# Publica o Worker
-WORKDIR "/src/SofaScore.Worker"
-RUN dotnet publish -c Release -o /app/publish
-
 # Estágio de Runtime
 FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS runtime
 WORKDIR /app
 
-###########################################################
-# INSTALAÇÃO DE DEPENDÊNCIAS DO CHROME (Essencial para Linux)
-###########################################################
+# INSTALAÇÃO DE DEPENDÊNCIAS
 RUN apt-get update && apt-get install -y \
     chromium \
     libnss3 \
@@ -38,14 +18,18 @@ RUN apt-get update && apt-get install -y \
     libgbm1 \
     libasound2 \
     fonts-liberation \
+    dumb-init \ 
     && rm -rf /var/lib/apt/lists/*
 
-# Variáveis de ambiente para o Puppeteer usar o Chromium instalado
+# Variáveis de ambiente para Puppeteer
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
-    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium \
+    DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 \
+    DOTNET_gcServer=0
 
 # Copia o build publicado
 COPY --from=build /app/publish .
 
-# Define o ponto de entrada
-ENTRYPOINT ["dotnet", "SofaScore.Worker.dll"]
+# Usar dumb-init para melhor gerenciamento de processos
+ENTRYPOINT ["dumb-init", "--"]
+CMD ["dotnet", "SofaScore.Worker.dll"]
