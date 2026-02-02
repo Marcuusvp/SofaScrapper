@@ -33,7 +33,7 @@ public class MatchEnrichmentWorker : BackgroundService
             try
             {
                 // ✅ O Scraper será descartado automaticamente ao fim deste bloco, fechando o Chrome
-                using (var scope = _serviceProvider.CreateScope())
+                await using (var scope = _serviceProvider.CreateAsyncScope())
                 {
                     var scraper = scope.ServiceProvider.GetRequiredService<SofaScraper>();
                     var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
