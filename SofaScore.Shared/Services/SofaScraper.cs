@@ -5,7 +5,7 @@ using System.Text.Json;
 
 namespace SofaScore.Shared.Services;
 
-public class SofaScraper
+public class SofaScraper : IAsyncDisposable
 {
     private IBrowser? _browser;
     private IPage? _page;
@@ -344,7 +344,7 @@ public class SofaScraper
         }
     }
 
-    private async Task<T> ExecuteWithRetryAsync<T>(Func<IPage, Task<T>> operation, string operationName)
+    private async Task<T>   ExecuteWithRetryAsync<T>(Func<IPage, Task<T>> operation, string operationName)
     {
         for (int attempt = 1; attempt <= MAX_RECONNECT_ATTEMPTS; attempt++)
         {
@@ -387,5 +387,10 @@ public class SofaScraper
         try { if (_page != null) { await _page.CloseAsync(); _page = null; } } catch { }
         try { if (_browser != null) { await _browser.CloseAsync(); _browser = null; } } catch { }
         GC.Collect(); // Força o .NET a limpar a memória
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        await CleanupAsync();
     }
 }
