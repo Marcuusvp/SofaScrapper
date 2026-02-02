@@ -15,11 +15,11 @@ public class MatchEnrichmentWorker : BackgroundService
     private readonly TimeSpan _idleDelay = TimeSpan.FromMinutes(30);    // Ciclo de hibernação
     private TimeSpan _currentDelay;
 
-    public MatchEnrichmentWorker(IServiceProvider serviceProvider, ILogger<MatchEnrichmentWorker> logger, TimeSpan currentDelay)
+    public MatchEnrichmentWorker(IServiceProvider serviceProvider, ILogger<MatchEnrichmentWorker> logger)
     {
         _serviceProvider = serviceProvider;
         _logger = logger;
-        _currentDelay = currentDelay;
+        _currentDelay = _activeDelay;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
