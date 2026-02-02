@@ -9,10 +9,9 @@ public class MatchEnrichmentWorker : BackgroundService
 {
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<MatchEnrichmentWorker> _logger;
-    private readonly TimeSpan _cycleDelay = TimeSpan.FromMinutes(3);
     // Configurações de tempo
-    private readonly TimeSpan _activeDelay = TimeSpan.FromMinutes(2);   // Ciclo rápido
-    private readonly TimeSpan _idleDelay = TimeSpan.FromMinutes(30);    // Ciclo de hibernação
+    private readonly TimeSpan _activeDelay = TimeSpan.FromMinutes(2);   // Ciclo rápido (jogos ao vivo)
+    private readonly TimeSpan _idleDelay = TimeSpan.FromMinutes(10);    // Ciclo de hibernação
     private TimeSpan _currentDelay;
 
     public MatchEnrichmentWorker(IServiceProvider serviceProvider, ILogger<MatchEnrichmentWorker> logger)
@@ -24,83 +23,41 @@ public class MatchEnrichmentWorker : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _logger.LogInformation("🚀 Smart Worker v5.2: Auto-Sleep & Resource Mgmt");
+        _logger.LogInformation("🚀 Smart Worker v6.0: Live Sync + Post-Game Enrichment");
 
         while (!stoppingToken.IsCancellationRequested)
         {
-            bool busyCycle = false; // Flag para determinar se houve trabalho real
-
             try
             {
-                // ✅ O Scraper será descartado automaticamente ao fim deste bloco, fechando o Chrome
                 await using (var scope = _serviceProvider.CreateAsyncScope())
                 {
                     var scraper = scope.ServiceProvider.GetRequiredService<SofaScraper>();
                     var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
-                    // --- FASE 0: LIMPEZA ---
+                    // --- FASE 0: LIMPEZA DE ZUMBIS ---
                     await RemoveZombieMatchesAsync(dbContext, stoppingToken);
 
-                    // --- FASE 1: LIVE SYNC ---
-                    // Só iniciamos o scraper se formos realmente usar
-                    // Inicializamos explicitamente dentro do bloco try
-                    
+                    // --- FASE 1: LIVE SYNC (score + status apenas) ---
                     _logger.LogInformation("📡 FASE 1: Verificando jogos ao vivo...");
                     await scraper.InitializeAsync();
-                    
+
                     var liveMatches = await scraper.GetLiveMatchesAsync();
-                    
-                    if (liveMatches.Any())
-                    {
-                        busyCycle = true;
-                        // Sincroniza dados básicos (Score, Status)
-                        var liveIds = liveMatches.Select(m => m.Id).ToList();
-                        var matchesInDb = await dbContext.Matches
-                            .Where(m => liveIds.Contains(m.Id))
-                            .ToListAsync(stoppingToken);
+                    bool hasLiveGames = liveMatches.Any();
 
-                        foreach (var dbMatch in matchesInDb)
-                        {
-                            var liveData = liveMatches.First(l => l.Id == dbMatch.Id);
-                            // Atualiza apenas se mudou algo para economizar DB writes
-                            if (dbMatch.Status != liveData.Status || dbMatch.HomeScore != liveData.HomeScore || dbMatch.AwayScore != liveData.AwayScore)
-                            {
-                                dbMatch.Status = liveData.Status ?? "Unknown";
-                                dbMatch.HomeScore = liveData.HomeScore ?? 0;
-                                dbMatch.AwayScore = liveData.AwayScore ?? 0;
-                                dbMatch.ProcessingStatus = MatchProcessingStatus.InProgress;
-                                dbMatch.StartTimestamp = liveData.StartTimestamp;
-                            }
-                        }
-                        await dbContext.SaveChangesAsync(stoppingToken);
+                    if (hasLiveGames)
+                    {
+                        await SyncLiveMatchesAsync(scraper, dbContext, liveMatches, stoppingToken);
                     }
 
-                    // --- FASE 2: ENRIQUECIMENTO ATIVO ---
-                    // Verifica quantos jogos ativos temos no banco
-                    var activeMatchesCount = await dbContext.Matches
-                        .CountAsync(m => m.ProcessingStatus == MatchProcessingStatus.InProgress, stoppingToken);
-
-                    if (activeMatchesCount > 0)
-                    {
-                        busyCycle = true;
-                        // Processa 1 por vez para não sobrecarregar
-                        var matchToProcess = await dbContext.Matches
-                            .Where(m => m.ProcessingStatus == MatchProcessingStatus.InProgress)
-                            .OrderBy(m => m.LastEnrichmentAttempt) // Pega o que faz mais tempo que não atualiza
-                            .FirstOrDefaultAsync(stoppingToken);
-
-                        if (matchToProcess != null)
-                        {
-                            _logger.LogInformation("🔍 FASE 2: Enriquecendo {Home} vs {Away}...", matchToProcess.HomeTeam, matchToProcess.AwayTeam);
-                            await ProcessMatchAsync(scraper, dbContext, matchToProcess, stoppingToken);
-                        }
-                    }
+                    // --- FASE 2: ENRIQUECIMENTO PÓS-JOGO ---
+                    // Busca jogos que já terminaram mas ainda não foram enriquecidos
+                    bool enrichedSomething = await EnrichFinishedMatchesAsync(scraper, dbContext, stoppingToken);
 
                     // --- DECISÃO DE SONO ---
-                    // Se não tem jogos no SofaScore E não tem jogos InProgress no banco -> Hiberna
-                    if (!liveMatches.Any() && activeMatchesCount == 0)
+                    // Hiberna apenas se não há jogos ao vivo E não há jogos pendentes de enriquecimento
+                    if (!hasLiveGames && !enrichedSomething)
                     {
-                        _logger.LogInformation("💤 Sem jogos ao vivo ou ativos. Entrando em hibernação ({Minutes} min).", _idleDelay.TotalMinutes);
+                        _logger.LogInformation("💤 Sem jogos ao vivo ou pendentes. Entrando em hibernação ({Minutes} min).", _idleDelay.TotalMinutes);
                         _currentDelay = _idleDelay;
                     }
                     else
@@ -108,54 +65,138 @@ public class MatchEnrichmentWorker : BackgroundService
                         _currentDelay = _activeDelay;
                     }
 
-                    // --- FASE 3: LIMBO (Opcional - só roda se estivermos ativos ou a cada X ciclos) ---
-                    // Se estamos hibernando, não rodamos FASE 3 para não acordar o browser a toa
-                    if (busyCycle)
+                    // --- FASE 3: LIMBO (só roda se estamos ativos) ---
+                    if (hasLiveGames || enrichedSomething)
                     {
                         await ProcessLimboMatches(scraper, dbContext, stoppingToken);
                     }
-                } 
-                // 🛑 AQUI o 'using' termina e chama scraper.DisposeAsync(), fechando o Chrome.
+                }
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "❌ Erro no ciclo do Worker. Tentando recuperar...");
-                _currentDelay = _activeDelay; // Em caso de erro, tenta de novo rápido
+                _currentDelay = _activeDelay;
             }
 
             await Task.Delay(_currentDelay, stoppingToken);
         }
     }
 
+    // =================================================================================================
+    // FASE 1: Sincroniza apenas score e status de jogos ao vivo
+    // =================================================================================================
+    private async Task SyncLiveMatchesAsync(
+        SofaScraper scraper,
+        AppDbContext dbContext,
+        List<Match> liveMatches,
+        CancellationToken ct)
+    {
+        var liveIds = liveMatches.Select(m => m.Id).ToList();
+
+        var matchesInDb = await dbContext.Matches
+            .Where(m => liveIds.Contains(m.Id))
+            .ToListAsync(ct);
+
+        foreach (var dbMatch in matchesInDb)
+        {
+            var liveData = liveMatches.First(l => l.Id == dbMatch.Id);
+
+            if (dbMatch.Status != liveData.Status ||
+                dbMatch.HomeScore != (liveData.HomeScore ?? 0) ||
+                dbMatch.AwayScore != (liveData.AwayScore ?? 0))
+            {
+                dbMatch.HomeScore = liveData.HomeScore ?? 0;
+                dbMatch.AwayScore = liveData.AwayScore ?? 0;
+                dbMatch.StartTimestamp = liveData.StartTimestamp;
+
+                // ✅ CRÍTICO: Se o jogo terminou, transiciona para Pending
+                // Isso é o "sinal" que a FASE 2 usará para enriquecê-lo
+                if (liveData.Status is "Ended" or "Finished")
+                {
+                    dbMatch.Status = liveData.Status;
+                    dbMatch.ProcessingStatus = MatchProcessingStatus.Pending;
+                    _logger.LogInformation("🏁 Jogo finalizado: {Home} vs {Away} ({HomeScore}-{AwayScore}). Marcado como Pending para enriquecimento.",
+                        dbMatch.HomeTeam, dbMatch.AwayTeam, dbMatch.HomeScore, dbMatch.AwayScore);
+                }
+                else
+                {
+                    dbMatch.Status = liveData.Status ?? "Unknown";
+                    dbMatch.ProcessingStatus = MatchProcessingStatus.InProgress;
+                }
+            }
+        }
+
+        await dbContext.SaveChangesAsync(ct);
+
+        _logger.LogInformation("📊 FASE 1: {Count} jogos ao vivo sincronizados.", matchesInDb.Count);
+    }
+
+    // =================================================================================================
+    // FASE 2: Enriquece apenas jogos que já terminaram e ainda não foram enriquecidos
+    // =================================================================================================
+    private async Task<bool> EnrichFinishedMatchesAsync(
+        SofaScraper scraper,
+        AppDbContext dbContext,
+        CancellationToken ct)
+    {
+        // Busca jogos finaliza dos que ainda precisam de enriquecimento
+        // Condições:
+        //   - Status é "Ended" ou "Finished" (confirmado pelo SofaScore)
+        //   - ProcessingStatus é Pending (não foi enriquecido ainda)
+        //   - Tentativas < 3 (evita loop infinito em caso de falha)
+        var pendingMatches = await dbContext.Matches
+            .Where(m =>
+                (m.Status == "Ended" || m.Status == "Finished") &&
+                m.ProcessingStatus == MatchProcessingStatus.Pending &&
+                m.EnrichmentAttempts < 3)
+            .OrderBy(m => m.StartTimestamp) // Enriquece primeiro os mais antigos
+            .ToListAsync(ct);
+
+        if (!pendingMatches.Any())
+            return false;
+
+        _logger.LogInformation("🔍 FASE 2: {Count} jogo(s) finalizado(s) pendente(s) de enriquecimento.", pendingMatches.Count);
+
+        foreach (var match in pendingMatches)
+        {
+            _logger.LogInformation("🔍 FASE 2: Enriquecendo {Home} vs {Away}...", match.HomeTeam, match.AwayTeam);
+            await ProcessMatchAsync(scraper, dbContext, match, ct);
+        }
+
+        return true;
+    }
+
+    // =================================================================================================
+    // FASE 3: Limbo — jogos que ficaram presos em status indefinido
+    // =================================================================================================
     private async Task ProcessLimboMatches(SofaScraper scraper, AppDbContext dbContext, CancellationToken ct)
     {
         long cutoffTimestamp = DateTimeOffset.UtcNow.AddHours(-3).ToUnixTimeSeconds();
         var limboMatches = await dbContext.Matches
-            .Where(m => (m.Status == "Not started" || m.Status == "Postponed") 
+            .Where(m => (m.Status == "Not started" || m.Status == "Postponed")
                         && m.StartTimestamp < cutoffTimestamp
-                        && m.ProcessingStatus != MatchProcessingStatus.Enriched 
+                        && m.ProcessingStatus != MatchProcessingStatus.Enriched
                         && m.ProcessingStatus != MatchProcessingStatus.Cancelled
                         && m.ProcessingStatus != MatchProcessingStatus.Postponed)
             .OrderBy(m => m.StartTimestamp)
-            .Take(5) 
+            .Take(5)
             .ToListAsync(ct);
 
         if (limboMatches.Any())
         {
-            _logger.LogInformation("🧟 FASE 3: Verificando {Count} jogos atrasados...", limboMatches.Count);
+            _logger.LogInformation("🧟 FASE 3: Verificando {Count} jogo(s) atrasado(s)...", limboMatches.Count);
             foreach (var match in limboMatches)
             {
                 await ProcessMatchAsync(scraper, dbContext, match, ct);
             }
         }
     }
+
+    // =================================================================================================
+    // FASE 0: Limpa jogos duplicados (Postponed/Cancelled) que já têm uma versão válida
+    // =================================================================================================
     private async Task RemoveZombieMatchesAsync(AppDbContext db, CancellationToken ct)
     {
-        // Esta query deleta jogos marcados como Postponed(3) ou Cancelled(4) SE
-        // existir outro jogo (m2) com os mesmos times/rodada/torneio que esteja
-        // Pending(0), InProgress(1) ou Enriched(2).
-        // Isso elimina o "Levante vs Villarreal" velho em favor do novo.
-        
         var sql = @"
             DELETE FROM ""Matches"" m1
             WHERE m1.""ProcessingStatus"" IN (3, 4)
@@ -171,12 +212,12 @@ public class MatchEnrichmentWorker : BackgroundService
             );
         ";
 
-        try 
+        try
         {
             int deleted = await db.Database.ExecuteSqlRawAsync(sql, ct);
             if (deleted > 0)
             {
-                _logger.LogInformation("🧹 Limpeza de Zumbis: {Count} partidas duplicadas/adiadas removidas.", deleted);
+                _logger.LogInformation("🧹 Limpeza de Zumbis: {Count} partida(s) duplicada(s)/adiada(s) removida(s).", deleted);
             }
         }
         catch (Exception ex)
@@ -185,6 +226,9 @@ public class MatchEnrichmentWorker : BackgroundService
         }
     }
 
+    // =================================================================================================
+    // Enriquecimento completo de uma partida finalizada (stats + incidentes + detalhes)
+    // =================================================================================================
     private async Task ProcessMatchAsync(SofaScraper scraper, AppDbContext dbContext, DbMatch match, CancellationToken ct)
     {
         try
@@ -196,14 +240,22 @@ public class MatchEnrichmentWorker : BackgroundService
                 match.Status = data.Details.Status?.Description ?? match.Status;
                 match.HomeScore = data.Details.HomeScore?.Display ?? match.HomeScore;
                 match.AwayScore = data.Details.AwayScore?.Display ?? match.AwayScore;
-                
+
                 if (data.Details.StartTimestamp > 0)
                 {
                     match.StartTimestamp = data.Details.StartTimestamp;
                 }
 
-                // Lógica de Status
-                if (match.Status == "Ended" || match.Status == "Finished")
+                // Atualiza detalhes extras se disponíveis
+                if (data.Details.Venue?.Name != null)
+                    match.Stadium = data.Details.Venue.Name;
+                if (data.Details.Referee?.Name != null)
+                    match.Referee = data.Details.Referee.Name;
+                if (data.Details.Attendance != null)
+                    match.Attendance = data.Details.Attendance;
+
+                // Lógica de Status final
+                if (match.Status is "Ended" or "Finished")
                 {
                     match.ProcessingStatus = MatchProcessingStatus.Enriched;
                 }
@@ -211,7 +263,7 @@ public class MatchEnrichmentWorker : BackgroundService
                 {
                     match.ProcessingStatus = MatchProcessingStatus.Postponed;
                 }
-                else if (match.Status == "Cancelled" || match.Status == "Canceled")
+                else if (match.Status is "Cancelled" or "Canceled")
                 {
                     match.ProcessingStatus = MatchProcessingStatus.Cancelled;
                 }
@@ -251,17 +303,27 @@ public class MatchEnrichmentWorker : BackgroundService
             match.EnrichmentAttempts++;
 
             await dbContext.SaveChangesAsync(ct);
-            _logger.LogInformation("✅ Atualizado: {Home} vs {Away} -> {Status} (ProcStatus: {PStatus})", 
+            _logger.LogInformation("✅ Enriquecido: {Home} vs {Away} -> {Status} (ProcStatus: {PStatus})",
                 match.HomeTeam, match.AwayTeam, match.Status, match.ProcessingStatus);
         }
         catch (Exception ex)
         {
-            _logger.LogError("❌ Falha no jogo {Id}: {Message}", match.Id, ex.Message);
+            match.EnrichmentAttempts++;
+            match.LastEnrichmentAttempt = DateTime.UtcNow;
+            match.LastEnrichmentError = ex.Message;
+
+            try { await dbContext.SaveChangesAsync(ct); } catch { }
+
+            _logger.LogError("❌ Falha no enriquecimento de {Home} vs {Away} (tentativa {Attempt}/3): {Message}",
+                match.HomeTeam, match.AwayTeam, match.EnrichmentAttempts, ex.Message);
         }
 
         await Task.Delay(2000, ct);
     }
 
+    // =================================================================================================
+    // Helper: Achata a estrutura de estatísticas em uma lista plana para o banco
+    // =================================================================================================
     private List<DbMatchStat> FlattenStatistics(int matchId, StatisticsResponse stats)
     {
         var list = new List<DbMatchStat>();
