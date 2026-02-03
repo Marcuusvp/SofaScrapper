@@ -67,11 +67,12 @@ public class RoundScheduler
         CancellationToken ct)
     {
         // 1. Descobre qual é a rodada atual (maior rodada que tem jogos)
-        var currentRound = await _db.Matches
+        var rounds = await _db.Matches
             .Where(m => m.TournamentId == tournamentId && m.SeasonId == seasonId)
             .Select(m => m.Round)
-            .DefaultIfEmpty(0)
-            .MaxAsync(ct);
+            .ToListAsync(ct);
+        
+        var currentRound = rounds.Any() ? rounds.Max() : 0;
 
         if (currentRound == 0)
         {
