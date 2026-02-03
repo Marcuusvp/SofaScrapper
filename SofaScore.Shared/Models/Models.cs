@@ -1,3 +1,5 @@
+using SofaScore.Shared.Data;
+
 namespace SofaScoreScraper;
 
 // Modelos para deserialização da API
@@ -335,4 +337,159 @@ public class MatchEnrichmentData
     public EventDetail? Details { get; set; }
     public StatisticsResponse? Statistics { get; set; }
     public List<Incident>? Incidents { get; set; }
+}
+
+/// <summary>
+/// DTO de resposta para listagem de partidas.
+/// Compatível com o tipo Match do frontend.
+/// </summary>
+public class MatchResponse
+{
+    public int Id { get; set; }
+    public string HomeTeam { get; set; } = string.Empty;
+    public string AwayTeam { get; set; } = string.Empty;
+    public int? HomeScore { get; set; }
+    public int? AwayScore { get; set; }
+    public string Status { get; set; } = string.Empty;
+    public string StartTime { get; set; } = string.Empty; // ISO 8601 string
+    public string? Tournament { get; set; }
+    public int? Round { get; set; }
+}
+
+/// <summary>
+/// DTO de resposta para detalhes completos de uma partida.
+/// Compatível com o tipo MatchDetail do frontend.
+/// </summary>
+public class MatchDetailResponse
+{
+    public int Id { get; set; }
+    public string HomeTeam { get; set; } = string.Empty;
+    public string AwayTeam { get; set; } = string.Empty;
+    public int? HomeScore { get; set; }
+    public int? AwayScore { get; set; }
+    public string Status { get; set; } = string.Empty;
+    public string StartTime { get; set; } = string.Empty;
+    public string? Tournament { get; set; }
+    public int? Round { get; set; }
+
+    // Campos adicionais de detalhes
+    public string? Stadium { get; set; }
+    public string? Referee { get; set; }
+    public int? Attendance { get; set; }
+
+    public List<MatchStatResponse> Stats { get; set; } = new();
+    public List<IncidentResponse> Incidents { get; set; } = new();
+}
+
+/// <summary>
+/// DTO para estatísticas de uma partida.
+/// Compatível com o tipo MatchStat do frontend.
+/// </summary>
+public class MatchStatResponse
+{
+    public string Period { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public string HomeValue { get; set; } = string.Empty;
+    public string AwayValue { get; set; } = string.Empty;
+    public int CompareCode { get; set; }
+}
+
+/// <summary>
+/// DTO para incidentes de uma partida.
+/// Compatível com o tipo Incident do frontend.
+/// </summary>
+public class IncidentResponse
+{
+    public string IncidentType { get; set; } = string.Empty;
+    public string? IncidentClass { get; set; }
+    public int Time { get; set; }
+    public int AddedTime { get; set; }
+    public bool IsHome { get; set; }
+    public string? PlayerName { get; set; }
+    public string? AssistName { get; set; }
+}
+/// <summary>
+/// Métodos de extensão para mapear entidades do banco para DTOs de resposta.
+/// </summary>
+public static class DtoExtensions
+{
+    /// <summary>
+    /// Converte DbMatch para MatchResponse (listagem simples).
+    /// </summary>
+    public static MatchResponse ToResponse(this DbMatch match, string? tournamentName = null)
+    {
+        return new MatchResponse
+        {
+            Id = match.Id,
+            HomeTeam = match.HomeTeam,
+            AwayTeam = match.AwayTeam,
+            HomeScore = match.Status == "Not started" ? null : match.HomeScore,
+            AwayScore = match.Status == "Not started" ? null : match.AwayScore,
+            Status = match.Status,
+            StartTime = DateTimeOffset.FromUnixTimeSeconds(match.StartTimestamp)
+                .UtcDateTime
+                .ToString("o"), // ISO 8601: "2026-02-03T19:00:00.0000000Z"
+            Tournament = tournamentName,
+            Round = match.Round
+        };
+    }
+
+    /// <summary>
+    /// Converte DbMatch para MatchDetailResponse (detalhes completos).
+    /// Requer que Stats e Incidents estejam carregados via Include().
+    /// </summary>
+    public static MatchDetailResponse ToDetailResponse(this DbMatch match, string? tournamentName = null)
+    {
+        return new MatchDetailResponse
+        {
+            Id = match.Id,
+            HomeTeam = match.HomeTeam,
+            AwayTeam = match.AwayTeam,
+            HomeScore = match.Status == "Not started" ? null : match.HomeScore,
+            AwayScore = match.Status == "Not started" ? null : match.AwayScore,
+            Status = match.Status,
+            StartTime = DateTimeOffset.FromUnixTimeSeconds(match.StartTimestamp)
+                .UtcDateTime
+                .ToString("o"),
+            Tournament = tournamentName,
+            Round = match.Round,
+            Stadium = match.Stadium,
+            Referee = match.Referee,
+            Attendance = match.Attendance,
+            Stats = match.Stats.Select(s => s.ToResponse()).ToList(),
+            Incidents = match.Incidents.Select(i => i.ToResponse()).ToList()
+        };
+    }
+
+    /// <summary>
+    /// Converte DbMatchStat para MatchStatResponse.
+    /// </summary>
+    public static MatchStatResponse ToResponse(this DbMatchStat stat)
+    {
+        return new MatchStatResponse
+        {
+            Period = stat.Period,
+            Name = stat.Name,
+            HomeValue = stat.HomeValue,
+            AwayValue = stat.AwayValue,
+            CompareCode = stat.CompareCode
+        };
+    }
+
+    /// <summary>
+    /// Converte DbIncident para IncidentResponse.
+    /// </summary>
+    public static IncidentResponse ToResponse(this DbIncident incident)
+    {
+        return new IncidentResponse
+        {
+            IncidentType = incident.IncidentType,
+            IncidentClass = incident.IncidentClass,
+            Time = incident.Time,
+            AddedTime = incident.AddedTime,
+            IsHome = incident.IsHome,
+            PlayerName = incident.PlayerName,
+            AssistName = incident.AssistName
+        };
+    }
 }

@@ -21,7 +21,7 @@ builder.Services.AddScoped<SofaScraper>(sp =>
 
 Console.WriteLine("✅ SofaScraper registrado");
 
-// 3. Registrar RoundScheduler ← CRÍTICO - ESTAVA FALTANDO
+// 3. Registrar RoundScheduler
 builder.Services.AddScoped<RoundScheduler>();
 
 Console.WriteLine("✅ RoundScheduler registrado");
@@ -37,7 +37,9 @@ var host = builder.Build();
 using (var scope = host.Services.CreateScope())
 {
     var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-    await context.Database.EnsureCreatedAsync(); 
+    await context.Database.EnsureCreatedAsync();
+    Console.WriteLine("✅ Banco de dados conectado/criado.");
 }
 
+Console.WriteLine("🚀 Worker iniciando...");
 host.Run();

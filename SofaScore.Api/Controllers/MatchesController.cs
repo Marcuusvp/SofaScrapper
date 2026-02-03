@@ -1,6 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using SofaScore.Api.DTOs;
 using SofaScore.Shared.Data;
 using SofaScore.Shared.Services;
 using SofaScoreScraper;
@@ -14,29 +13,25 @@ public class MatchesController : ControllerBase
     private readonly SofaScraper _scraper;
     private readonly DataManager _dataManager;
     private readonly AppDbContext _db;
-    private readonly ILogger<MatchesController> _logger;
 
-    public MatchesController(SofaScraper scraper, DataManager dataManager, AppDbContext db, ILogger<MatchesController> logger)
+    public MatchesController(SofaScraper scraper, DataManager dataManager, AppDbContext db)
     {
         _scraper = scraper;
         _dataManager = dataManager;
         _db = db;
-        _logger = logger;
     }
 
+    /// <summary>
+    /// Retorna jogos ao vivo baseado em janela de segurança e status.
+    /// </summary>
     [HttpGet("live")]
     public async Task<IActionResult> GetLive()
     {
-        // Define uma janela de segurança: Jogos que começaram nas últimas 5 horas.
-        // Jogos mais antigos que isso com status "Ao Vivo" são considerados lixo/erro.
         var safetyCutoff = DateTimeOffset.UtcNow.AddHours(-5).ToUnixTimeSeconds();
 
         var liveMatches = await _db.Matches
             .Where(m => 
-                // 1. Deve ter começado recentemente
                 m.StartTimestamp >= safetyCutoff && 
-                
-                // 2. E ter status de jogo em andamento
                 (m.ProcessingStatus == MatchProcessingStatus.InProgress 
                  || m.Status == "Live" 
                  || m.Status == "Inplay"
@@ -48,11 +43,14 @@ public class MatchesController : ControllerBase
             .OrderBy(m => m.StartTimestamp)
             .ToListAsync();
 
-        return Ok(liveMatches);
+        // Mapeia para MatchResponse usando as extensões
+        var response = liveMatches.Select(m => m.ToResponse()).ToList();
+        return Ok(response);
     }
 
     /// <summary>
-    /// Retorna jogos de uma rodada específica de um campeonato
+    /// Retorna jogos de uma rodada específica de um campeonato.
+    /// Dados devem estar previamente no banco (populados pelo Worker).
     /// </summary>
     [HttpGet("tournament/{tournamentName}/round/{round}")]
     public async Task<IActionResult> GetByRound(string tournamentName, int round)
@@ -60,7 +58,7 @@ public class MatchesController : ControllerBase
         try 
         {
             var info = TournamentsInfo.GetTournamentInfo(tournamentName);
-            
+
             var matches = await _db.Matches
                 .Where(m => 
                     m.TournamentId == info.tournamentId && 
@@ -71,14 +69,17 @@ public class MatchesController : ControllerBase
 
             if (!matches.Any())
             {
-                _logger.LogWarning(
-                    "Nenhum jogo encontrado para {Tournament} rodada {Round}", 
-                    tournamentName, round
-                );
-                return Ok(new List<MatchResponse>());
+                return Ok(new
+                {
+                    message = $"Nenhum jogo encontrado para {info.name} - Rodada {round}. Os dados serão carregados em breve.",
+                    tournament = info.name,
+                    round = round,
+                    matches = Array.Empty<MatchResponse>()
+                });
             }
 
-            var response = matches.Select(MatchMapper.ToMatchResponse).ToList();
+            // Mapeia para MatchResponse incluindo o nome do torneio
+            var response = matches.Select(m => m.ToResponse(info.name)).ToList();
             return Ok(response);
         }
         catch (ArgumentException ex)
@@ -88,55 +89,43 @@ public class MatchesController : ControllerBase
     }
 
     /// <summary>
-    /// Retorna jogos de uma fase da Champions League
+    /// Retorna jogos de uma fase específica da Champions League (rodadas 1-8 da fase de liga).
     /// </summary>
     [HttpGet("champions-league/phase/{phaseId}")]
     public async Task<IActionResult> GetChampionsLeague(int phaseId)
     {
-        var matches = await _db.Matches
-            .Where(m => 
-                m.TournamentId == TournamentsInfo.ChampionsLeague.TournamentId &&
-                m.SeasonId == TournamentsInfo.ChampionsLeague.SeasonId &&
-                m.Round == phaseId)
-            .OrderBy(m => m.StartTimestamp)
-            .ToListAsync();
+        try
+        {
+            var matches = await _db.Matches
+                .Where(m => 
+                    m.TournamentId == TournamentsInfo.ChampionsLeague.TournamentId && 
+                    m.SeasonId == TournamentsInfo.ChampionsLeague.SeasonId && 
+                    m.Round == phaseId)
+                .OrderBy(m => m.StartTimestamp)
+                .ToListAsync();
 
-        var response = matches.Select(MatchMapper.ToMatchResponse).ToList();
-        return Ok(response);
+            if (!matches.Any())
+            {
+                return Ok(new
+                {
+                    message = $"Nenhum jogo encontrado para Champions League - Fase {phaseId}.",
+                    tournament = TournamentsInfo.ChampionsLeague.Name,
+                    phase = phaseId,
+                    matches = Array.Empty<MatchResponse>()
+                });
+            }
+
+            var response = matches.Select(m => m.ToResponse(TournamentsInfo.ChampionsLeague.Name)).ToList();
+            return Ok(response);
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { error = ex.Message });
+        }
     }
 
     /// <summary>
-    /// Retorna detalhes completos de uma partida específica
-    /// Inclui estatísticas e incidentes
-    /// </summary>
-    [HttpGet("{matchId}/details")]
-    public async Task<IActionResult> GetDetails(int matchId)
-    {
-        var match = await _db.Matches
-            .Include(m => m.Stats)
-            .Include(m => m.Incidents)
-            .FirstOrDefaultAsync(m => m.Id == matchId);
-
-        if (match == null)
-        {
-            _logger.LogWarning("Partida {MatchId} não encontrada", matchId);
-            return NotFound(new { error = "Partida não encontrada" });
-        }
-
-        // Se a partida ainda não foi enriquecida, retorna com dados básicos
-        if (match.ProcessingStatus != MatchProcessingStatus.Enriched)
-        {
-            _logger.LogInformation(
-                "Partida {MatchId} ainda não foi enriquecida (Status: {Status})",
-                matchId, match.ProcessingStatus
-            );
-        }
-
-        var response = MatchMapper.ToMatchDetailResponse(match);
-        return Ok(response);
-    }
-    /// <summary>
-    /// Retorna jogos das rodadas de qualificação da Champions League (1, 2 ou 3)
+    /// Retorna jogos das rodadas de qualificação da Champions League (rodadas 1, 2 ou 3).
     /// </summary>
     [HttpGet("champions-league/qualification/{round}")]
     public async Task<IActionResult> GetChampionsLeagueQualification(int round)
@@ -144,37 +133,115 @@ public class MatchesController : ControllerBase
         if (round < 1 || round > 3)
             return BadRequest("A rodada de qualificação deve ser 1, 2 ou 3.");
 
-        var matches = await _db.Matches
-            .Where(m => 
-                m.TournamentId == TournamentsInfo.ChampionsLeague.TournamentId &&
-                m.SeasonId == TournamentsInfo.ChampionsLeague.SeasonId &&
-                m.Round == round)
-            .OrderBy(m => m.StartTimestamp)
-            .ToListAsync();
+        try 
+        {
+            var matches = await _db.Matches
+                .Where(m => 
+                    m.TournamentId == TournamentsInfo.ChampionsLeague.TournamentId && 
+                    m.SeasonId == TournamentsInfo.ChampionsLeague.SeasonId && 
+                    m.Round == round)
+                .OrderBy(m => m.StartTimestamp)
+                .ToListAsync();
 
-        var response = matches.Select(MatchMapper.ToMatchResponse).ToList();
-        return Ok(response);
+            if (!matches.Any())
+            {
+                return Ok(new
+                {
+                    message = $"Nenhum jogo encontrado para Champions League - Qualificação Rodada {round}.",
+                    tournament = TournamentsInfo.ChampionsLeague.Name,
+                    round = round,
+                    matches = Array.Empty<MatchResponse>()
+                });
+            }
+
+            var response = matches.Select(m => m.ToResponse(TournamentsInfo.ChampionsLeague.Name)).ToList();
+            return Ok(response);
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { error = ex.Message });
+        }
     }
 
     /// <summary>
-    /// Retorna jogos do playoff de qualificação da Champions League
+    /// Retorna jogos do Playoff de qualificação da Champions League (Round ID fixo: 636).
     /// </summary>
     [HttpGet("champions-league/playoff")]
     public async Task<IActionResult> GetChampionsLeaguePlayoff()
     {
-        // Round 636 é o ID específico do playoff conforme identificado anteriormente
-        const int playoffRoundId = 636;
+        try
+        {
+            const int playoffRoundId = 636;
 
-        var matches = await _db.Matches
-            .Where(m => 
-                m.TournamentId == TournamentsInfo.ChampionsLeague.TournamentId &&
-                m.SeasonId == TournamentsInfo.ChampionsLeague.SeasonId &&
-                m.Round == playoffRoundId)
-            .OrderBy(m => m.StartTimestamp)
-            .ToListAsync();
+            var matches = await _db.Matches
+                .Where(m => 
+                    m.TournamentId == TournamentsInfo.ChampionsLeague.TournamentId && 
+                    m.SeasonId == TournamentsInfo.ChampionsLeague.SeasonId && 
+                    m.Round == playoffRoundId)
+                .OrderBy(m => m.StartTimestamp)
+                .ToListAsync();
 
-        var response = matches.Select(MatchMapper.ToMatchResponse).ToList();
-        return Ok(response);
+            if (!matches.Any())
+            {
+                return Ok(new
+                {
+                    message = "Nenhum jogo encontrado para Champions League - Playoff de Qualificação.",
+                    tournament = TournamentsInfo.ChampionsLeague.Name,
+                    round = playoffRoundId,
+                    matches = Array.Empty<MatchResponse>()
+                });
+            }
+
+            var response = matches.Select(m => m.ToResponse(TournamentsInfo.ChampionsLeague.Name)).ToList();
+            return Ok(response);
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { error = ex.Message });
+        }
+    }
+
+    /// <summary>
+    /// Retorna detalhes completos de uma partida (stats + incidents).
+    /// Apenas dados do banco - não faz scraping.
+    /// </summary>
+    [HttpGet("{matchId}/details")]
+    public async Task<IActionResult> GetDetails(int matchId)
+    {
+        try
+        {
+            var match = await _db.Matches
+                .Include(m => m.Stats)
+                .Include(m => m.Incidents)
+                .FirstOrDefaultAsync(m => m.Id == matchId);
+
+            if (match == null)
+            {
+                return NotFound(new 
+                { 
+                    error = $"Partida {matchId} não encontrada no banco de dados.",
+                    message = "Aguarde o Worker processar esta partida ou verifique se o ID está correto."
+                });
+            }
+
+            // Se o jogo não foi enriquecido ainda, avisa o frontend
+            if (match.ProcessingStatus != MatchProcessingStatus.Enriched)
+            {
+                return Ok(new
+                {
+                    match = match.ToDetailResponse(),
+                    warning = $"Dados parciais. Status de processamento: {match.ProcessingStatus}",
+                    isPartial = true
+                });
+            }
+
+            var response = match.ToDetailResponse();
+            return Ok(response);
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { error = ex.Message });
+        }
     }
 
     /// <summary>
@@ -182,8 +249,6 @@ public class MatchesController : ControllerBase
     /// Os dados são mantidos pelo Worker e atualizados automaticamente
     /// quando uma partida do campeonato é enriquecida.
     /// </summary>
-    /// <param name="tournamentName">Nome do campeonato (ex: premierleague, laliga, seriea)</param>
-    /// <returns>Classificação com todas as linhas e informações de promoção</returns>
     [HttpGet("tournament/{tournamentName}/standings")]
     public async Task<IActionResult> GetStandings(string tournamentName)
     {
@@ -233,6 +298,7 @@ public class MatchesController : ControllerBase
             return BadRequest(new { error = ex.Message });
         }
     }
+
     /// <summary>
     /// [ADMIN] Popula inicialmente a tabela Standings para todos os torneios configurados.
     /// Este endpoint deve ser executado apenas localmente via Swagger.
@@ -347,5 +413,4 @@ public class MatchesController : ControllerBase
             return StatusCode(500, new { error = ex.Message });
         }
     }
-
 }

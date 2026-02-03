@@ -6,7 +6,8 @@ using SofaScoreScraper;
 namespace SofaScore.Worker.Services;
 
 /// <summary>
-/// Responsável por identificar e buscar a próxima rodada de cada campeonato
+/// Responsável por identificar e buscar a próxima rodada de cada campeonato de forma proativa.
+/// Garante que os dados da próxima rodada estejam disponíveis antes de serem consultados pela API.
 /// </summary>
 public class RoundScheduler
 {
@@ -25,11 +26,12 @@ public class RoundScheduler
     }
 
     /// <summary>
-    /// Verifica e busca a próxima rodada para todos os campeonatos configurados
+    /// Verifica e busca a próxima rodada para todos os campeonatos configurados.
+    /// Executa periodicamente (a cada 6h conforme configurado no Worker).
     /// </summary>
     public async Task CheckAndFetchNextRoundsAsync(CancellationToken ct)
     {
-        _logger.LogInformation("🔄 Verificando próximas rodadas para todos os campeonatos...");
+        _logger.LogInformation("🔄 Round Scheduler: Verificando próximas rodadas para todos os campeonatos...");
 
         foreach (var tournament in TournamentsInfo.AllTournaments.List)
         {
@@ -49,15 +51,21 @@ public class RoundScheduler
             catch (Exception ex)
             {
                 _logger.LogError(ex, 
-                    "Erro ao verificar próxima rodada para {Tournament}", 
+                    "❌ Round Scheduler: Erro ao verificar próxima rodada para {Tournament}", 
                     tournament.name
                 );
             }
         }
+
+        _logger.LogInformation("✅ Round Scheduler: Verificação completa.");
     }
 
     /// <summary>
-    /// Verifica e busca a próxima rodada para um campeonato específico
+    /// Verifica e busca a próxima rodada para um campeonato específico.
+    /// Lógica:
+    /// 1. Descobre qual é a rodada atual (maior rodada que tem jogos)
+    /// 2. Verifica se a rodada atual está "resolvida" (todos jogos em estado terminal)
+    /// 3. Se sim, busca a próxima rodada via scraper e salva no banco
     /// </summary>
     private async Task CheckAndFetchNextRoundForTournamentAsync(
         int tournamentId,
@@ -70,11 +78,10 @@ public class RoundScheduler
         var rounds = await _db.Matches
             .Where(m => m.TournamentId == tournamentId && m.SeasonId == seasonId)
             .Select(m => m.Round)
+            .Distinct()
             .ToListAsync(ct);
-        
-        var currentRound = rounds.Any() ? rounds.Max() : 0;
 
-        if (currentRound == 0)
+        if (!rounds.Any())
         {
             _logger.LogWarning(
                 "⚠️ {Tournament}: Nenhuma rodada encontrada no banco. Campeonato pode não estar inicializado.",
@@ -82,6 +89,8 @@ public class RoundScheduler
             );
             return;
         }
+
+        var currentRound = rounds.Max();
 
         // 2. Verifica se a rodada atual está "resolvida"
         bool isCurrentRoundResolved = await IsRoundResolvedAsync(
@@ -194,7 +203,11 @@ public class RoundScheduler
     }
 
     /// <summary>
-    /// Verifica se uma rodada está "resolvida" (todos jogos em estado terminal)
+    /// Verifica se uma rodada está "resolvida" (todos jogos em estado terminal).
+    /// Uma rodada está resolvida quando todos os jogos estão:
+    /// - Enriched (finalizado e processado)
+    /// - Cancelled (cancelado)
+    /// - Postponed (adiado - será um novo jogo em outra rodada)
     /// </summary>
     private async Task<bool> IsRoundResolvedAsync(
         int tournamentId,
@@ -212,10 +225,7 @@ public class RoundScheduler
         if (!matches.Any())
             return false;
 
-        // Uma rodada está resolvida quando todos os jogos estão em:
-        // - Enriched (finalizado e processado)
-        // - Cancelled (cancelado)
-        // - Postponed (adiado - será um novo jogo em outra rodada)
+        // Uma rodada está resolvida quando todos os jogos estão em estado terminal
         var terminalStatuses = new[]
         {
             MatchProcessingStatus.Enriched,
