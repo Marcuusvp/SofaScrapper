@@ -18,7 +18,7 @@ builder.Services.AddSwaggerGen();
 // 2. Configurar Banco de Dados (Supabase)
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
 builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseNpgsql(connectionString));
+    options.UseNpgsql(connectionString, b => b.MigrationsAssembly("SofaScore.Api")));
 
 builder.Services.AddScoped<SofaScraper>();
 

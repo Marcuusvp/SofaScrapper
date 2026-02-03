@@ -11,7 +11,7 @@ public class MatchEnrichmentWorker : BackgroundService
     private readonly ILogger<MatchEnrichmentWorker> _logger;
     // Configurações de tempo
     private readonly TimeSpan _activeDelay = TimeSpan.FromMinutes(2);   // Ciclo rápido (jogos ao vivo)
-    private readonly TimeSpan _idleDelay = TimeSpan.FromMinutes(30);    // Ciclo de hibernação
+    private readonly TimeSpan _idleDelay = TimeSpan.FromMinutes(10);    // Ciclo de hibernação
     private TimeSpan _currentDelay;
 
     public MatchEnrichmentWorker(IServiceProvider serviceProvider, ILogger<MatchEnrichmentWorker> logger)
