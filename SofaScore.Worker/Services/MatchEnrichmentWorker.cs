@@ -9,10 +9,14 @@ public class MatchEnrichmentWorker : BackgroundService
 {
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<MatchEnrichmentWorker> _logger;
+    
     // Configurações de tempo
     private readonly TimeSpan _activeDelay = TimeSpan.FromMinutes(2);   // Ciclo rápido (jogos ao vivo)
     private readonly TimeSpan _idleDelay = TimeSpan.FromMinutes(10);    // Ciclo de hibernação
+    private readonly TimeSpan _roundCheckInterval = TimeSpan.FromHours(6); // Checa próxima rodada a cada 6h
+    
     private TimeSpan _currentDelay;
+    private DateTime _lastRoundCheck = DateTime.MinValue;
 
     public MatchEnrichmentWorker(IServiceProvider serviceProvider, ILogger<MatchEnrichmentWorker> logger)
     {
@@ -23,7 +27,7 @@ public class MatchEnrichmentWorker : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _logger.LogInformation("🚀 Smart Worker v6.1: Live Sync + Post-Game Enrichment + Standings Sync");
+        _logger.LogInformation("🚀 Smart Worker v7.0: Live Sync + Enrichment + Standings + Round Scheduler");
 
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -33,9 +37,18 @@ public class MatchEnrichmentWorker : BackgroundService
                 {
                     var scraper = scope.ServiceProvider.GetRequiredService<SofaScraper>();
                     var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                    var roundScheduler = scope.ServiceProvider.GetRequiredService<RoundScheduler>();
 
                     // --- FASE 0: LIMPEZA DE ZUMBIS ---
                     await RemoveZombieMatchesAsync(dbContext, stoppingToken);
+
+                    // --- FASE 0.5: BUSCAR PRÓXIMAS RODADAS (a cada 6h) ---
+                    if ((DateTime.UtcNow - _lastRoundCheck) > _roundCheckInterval)
+                    {
+                        _logger.LogInformation("📅 FASE 0.5: Verificando próximas rodadas...");
+                        await roundScheduler.CheckAndFetchNextRoundsAsync(stoppingToken);
+                        _lastRoundCheck = DateTime.UtcNow;
+                    }
 
                     // --- FASE 1: LIVE SYNC (score + status apenas) ---
                     _logger.LogInformation("📡 FASE 1: Verificando jogos ao vivo...");
@@ -148,7 +161,6 @@ public class MatchEnrichmentWorker : BackgroundService
         _logger.LogInformation("🔍 FASE 2: {Count} jogo(s) finalizado(s) pendente(s) de enriquecimento.", pendingMatches.Count);
 
         // Coleta os TournamentIds que tiveram jogos enriquecidos com sucesso
-        // Para disparar o sync de standings apenas uma vez por campeonato por ciclo
         var tournamentIdsToSyncStandings = new HashSet<int>();
 
         foreach (var match in pendingMatches)
@@ -173,7 +185,6 @@ public class MatchEnrichmentWorker : BackgroundService
 
     // =================================================================================================
     // STANDINGS SYNC: Atualiza classificação de um campeonato no banco
-    // Disparado automaticamente quando um jogo daquele campeonato é enriquecido
     // =================================================================================================
     private async Task SyncStandingsAsync(
         SofaScraper scraper,
@@ -181,7 +192,6 @@ public class MatchEnrichmentWorker : BackgroundService
         int tournamentId,
         CancellationToken ct)
     {
-        // Resolve SeasonId a partir do TournamentId
         var seasonId = TournamentsInfo.GetSeasonIdByTournament(tournamentId);
         if (seasonId == null)
         {
@@ -193,7 +203,6 @@ public class MatchEnrichmentWorker : BackgroundService
 
         try
         {
-            // 1. Busca classificação atual via scraper
             var standingsData = await scraper.GetStandingsAsync(tournamentId, seasonId.Value);
 
             if (standingsData?.Rows == null || !standingsData.Rows.Any())
@@ -202,7 +211,6 @@ public class MatchEnrichmentWorker : BackgroundService
                 return;
             }
 
-            // 2. Busca standings existentes no banco para este campeonato
             var existingStandings = await dbContext.Standings
                 .Include(s => s.Promotions)
                 .Where(s => s.TournamentId == tournamentId && s.SeasonId == seasonId.Value)
@@ -219,7 +227,6 @@ public class MatchEnrichmentWorker : BackgroundService
 
                 if (existingStandings.TryGetValue(teamId, out var dbStanding))
                 {
-                    // ✅ Atualiza linha existente
                     dbStanding.TeamName = teamName;
                     dbStanding.Position = row.Position;
                     dbStanding.Matches = row.Matches;
@@ -232,7 +239,6 @@ public class MatchEnrichmentWorker : BackgroundService
                     dbStanding.Points = row.Points;
                     dbStanding.UpdatedAt = now;
 
-                    // Atualiza promoções: limpa as antigas e reinsere
                     dbContext.StandingPromotions.RemoveRange(dbStanding.Promotions);
                     if (row.Promotion != null)
                     {
@@ -245,7 +251,6 @@ public class MatchEnrichmentWorker : BackgroundService
                 }
                 else
                 {
-                    // ✅ Insere nova linha
                     var newStanding = new DbStanding
                     {
                         TournamentId = tournamentId,
@@ -348,8 +353,7 @@ public class MatchEnrichmentWorker : BackgroundService
     }
 
     // =================================================================================================
-    // Enriquecimento completo de uma partida finalizada (stats + incidentes + detalhes)
-    // Retorna true se o enriquecimento foi bem-sucedido
+    // Enriquecimento completo de uma partida finalizada
     // =================================================================================================
     private async Task<bool> ProcessMatchAsync(SofaScraper scraper, AppDbContext dbContext, DbMatch match, CancellationToken ct)
     {
@@ -373,7 +377,6 @@ public class MatchEnrichmentWorker : BackgroundService
                 if (data.Details.Attendance != null)
                     match.Attendance = data.Details.Attendance;
 
-                // Lógica de Status final
                 if (match.Status is "Ended" or "Finished")
                     match.ProcessingStatus = MatchProcessingStatus.Enriched;
                 else if (match.Status == "Postponed")
@@ -382,7 +385,6 @@ public class MatchEnrichmentWorker : BackgroundService
                     match.ProcessingStatus = MatchProcessingStatus.Cancelled;
             }
 
-            // Estatísticas
             if (data.Statistics?.Statistics != null)
             {
                 var oldStats = await dbContext.MatchStats.Where(s => s.MatchId == match.Id).ToListAsync(ct);
@@ -390,7 +392,6 @@ public class MatchEnrichmentWorker : BackgroundService
                 await dbContext.MatchStats.AddRangeAsync(FlattenStatistics(match.Id, data.Statistics), ct);
             }
 
-            // Incidentes
             if (data.Incidents != null)
             {
                 var oldIncidents = await dbContext.Incidents.Where(i => i.MatchId == match.Id).ToListAsync(ct);
@@ -435,9 +436,6 @@ public class MatchEnrichmentWorker : BackgroundService
         }
     }
 
-    // =================================================================================================
-    // Helper: Achata a estrutura de estatísticas em uma lista plana para o banco
-    // =================================================================================================
     private List<DbMatchStat> FlattenStatistics(int matchId, StatisticsResponse stats)
     {
         var list = new List<DbMatchStat>();

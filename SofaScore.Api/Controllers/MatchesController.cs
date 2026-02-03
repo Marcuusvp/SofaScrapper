@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using SofaScore.Api.DTOs;
 using SofaScore.Shared.Data;
 using SofaScore.Shared.Services;
 using SofaScoreScraper;
@@ -13,15 +14,17 @@ public class MatchesController : ControllerBase
     private readonly SofaScraper _scraper;
     private readonly DataManager _dataManager;
     private readonly AppDbContext _db;
+    private readonly ILogger<MatchesController> _logger;
 
-    public MatchesController(SofaScraper scraper, DataManager dataManager, AppDbContext db)
+    public MatchesController(SofaScraper scraper, DataManager dataManager, AppDbContext db, ILogger<MatchesController> logger)
     {
         _scraper = scraper;
         _dataManager = dataManager;
         _db = db;
+        _logger = logger;
     }
 
-[HttpGet("live")]
+    [HttpGet("live")]
     public async Task<IActionResult> GetLive()
     {
         // Define uma janela de segurança: Jogos que começaram nas últimas 5 horas.
@@ -48,98 +51,130 @@ public class MatchesController : ControllerBase
         return Ok(liveMatches);
     }
 
+    /// <summary>
+    /// Retorna jogos de uma rodada específica de um campeonato
+    /// </summary>
     [HttpGet("tournament/{tournamentName}/round/{round}")]
     public async Task<IActionResult> GetByRound(string tournamentName, int round)
     {
         try 
         {
             var info = TournamentsInfo.GetTournamentInfo(tournamentName);
-            var matches = await _scraper.GetMatchesAsync(info.tournamentId, info.seasonId, round);
-            return Ok(matches);
+            
+            var matches = await _db.Matches
+                .Where(m => 
+                    m.TournamentId == info.tournamentId && 
+                    m.SeasonId == info.seasonId && 
+                    m.Round == round)
+                .OrderBy(m => m.StartTimestamp)
+                .ToListAsync();
+
+            if (!matches.Any())
+            {
+                _logger.LogWarning(
+                    "Nenhum jogo encontrado para {Tournament} rodada {Round}", 
+                    tournamentName, round
+                );
+                return Ok(new List<MatchResponse>());
+            }
+
+            var response = matches.Select(MatchMapper.ToMatchResponse).ToList();
+            return Ok(response);
         }
-        catch (Exception ex)
+        catch (ArgumentException ex)
         {
             return BadRequest(new { error = ex.Message });
         }
     }
 
-    // Endpoint específico para Champions League (devido à lógica complexa de fases)
+    /// <summary>
+    /// Retorna jogos de uma fase da Champions League
+    /// </summary>
     [HttpGet("champions-league/phase/{phaseId}")]
     public async Task<IActionResult> GetChampionsLeague(int phaseId)
     {
-        // 1-8: Liga, 9+: Mata-mata
-        var matches = await _scraper.GetMatchesAsync(TournamentsInfo.ChampionsLeague.TournamentId, TournamentsInfo.ChampionsLeague.SeasonId, phaseId);
-        return Ok(matches);
+        var matches = await _db.Matches
+            .Where(m => 
+                m.TournamentId == TournamentsInfo.ChampionsLeague.TournamentId &&
+                m.SeasonId == TournamentsInfo.ChampionsLeague.SeasonId &&
+                m.Round == phaseId)
+            .OrderBy(m => m.StartTimestamp)
+            .ToListAsync();
+
+        var response = matches.Select(MatchMapper.ToMatchResponse).ToList();
+        return Ok(response);
     }
 
+    /// <summary>
+    /// Retorna detalhes completos de uma partida específica
+    /// Inclui estatísticas e incidentes
+    /// </summary>
     [HttpGet("{matchId}/details")]
     public async Task<IActionResult> GetDetails(int matchId)
     {
-        try
+        var match = await _db.Matches
+            .Include(m => m.Stats)
+            .Include(m => m.Incidents)
+            .FirstOrDefaultAsync(m => m.Id == matchId);
+
+        if (match == null)
         {
-            var data = await _dataManager.GetMatchFullDataAsync(matchId);
-            return Ok(data);
+            _logger.LogWarning("Partida {MatchId} não encontrada", matchId);
+            return NotFound(new { error = "Partida não encontrada" });
         }
-        catch (Exception ex)
+
+        // Se a partida ainda não foi enriquecida, retorna com dados básicos
+        if (match.ProcessingStatus != MatchProcessingStatus.Enriched)
         {
-            return StatusCode(500, new { error = ex.Message });
+            _logger.LogInformation(
+                "Partida {MatchId} ainda não foi enriquecida (Status: {Status})",
+                matchId, match.ProcessingStatus
+            );
         }
+
+        var response = MatchMapper.ToMatchDetailResponse(match);
+        return Ok(response);
     }
-    // GET: api/Matches/champions-league/qualification/2
-    // Para as rodadas 1, 2 e 3 da qualificação
+    /// <summary>
+    /// Retorna jogos das rodadas de qualificação da Champions League (1, 2 ou 3)
+    /// </summary>
     [HttpGet("champions-league/qualification/{round}")]
     public async Task<IActionResult> GetChampionsLeagueQualification(int round)
     {
         if (round < 1 || round > 3)
             return BadRequest("A rodada de qualificação deve ser 1, 2 ou 3.");
 
-        try 
-        {
-            // Constrói o slug baseado na rodada (ex: qualification-round-2)
-            string slug = $"qualification-round-{round}";
-            
-            var matches = await _scraper.GetQualificationMatchesAsync(
-                TournamentsInfo.ChampionsLeague.TournamentId,
-                TournamentsInfo.ChampionsLeague.SeasonId,
-                round,
-                slug,
-                null // Prefixo é null para estas rodadas
-            );
+        var matches = await _db.Matches
+            .Where(m => 
+                m.TournamentId == TournamentsInfo.ChampionsLeague.TournamentId &&
+                m.SeasonId == TournamentsInfo.ChampionsLeague.SeasonId &&
+                m.Round == round)
+            .OrderBy(m => m.StartTimestamp)
+            .ToListAsync();
 
-            return Ok(matches);
-        }
-        catch (Exception ex)
-        {
-            return BadRequest(new { error = ex.Message });
-        }
+        var response = matches.Select(MatchMapper.ToMatchResponse).ToList();
+        return Ok(response);
     }
 
-    // GET: api/Matches/champions-league/playoff
-    // Para o Playoff específico de qualificação (aquele ID 636)
+    /// <summary>
+    /// Retorna jogos do playoff de qualificação da Champions League
+    /// </summary>
     [HttpGet("champions-league/playoff")]
     public async Task<IActionResult> GetChampionsLeaguePlayoff()
     {
-        try
-        {
-            // Dados fixos conforme descoberto no Console App
-            int roundId = 636;
-            string slug = "playoff-round";
-            string prefix = "Qualification";
+        // Round 636 é o ID específico do playoff conforme identificado anteriormente
+        const int playoffRoundId = 636;
 
-            var matches = await _scraper.GetQualificationMatchesAsync(
-                TournamentsInfo.ChampionsLeague.TournamentId,
-                TournamentsInfo.ChampionsLeague.SeasonId,
-                roundId,
-                slug,
-                prefix
-            );
+        var matches = await _db.Matches
+            .Where(m => 
+                m.TournamentId == TournamentsInfo.ChampionsLeague.TournamentId &&
+                m.SeasonId == TournamentsInfo.ChampionsLeague.SeasonId &&
+                m.Round == playoffRoundId)
+            .OrderBy(m => m.StartTimestamp)
+            .ToListAsync();
 
-            return Ok(matches);
-        }
-        catch (Exception ex)
-        {
-            return BadRequest(new { error = ex.Message });
-        }
+        var response = matches.Select(MatchMapper.ToMatchResponse).ToList();
+        return Ok(response);
     }
 
     /// <summary>
