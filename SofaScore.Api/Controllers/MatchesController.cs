@@ -142,16 +142,58 @@ public class MatchesController : ControllerBase
         }
     }
 
+    /// <summary>
+    /// Retorna a classificação atual de um campeonato.
+    /// Os dados são mantidos pelo Worker e atualizados automaticamente
+    /// quando uma partida do campeonato é enriquecida.
+    /// </summary>
+    /// <param name="tournamentName">Nome do campeonato (ex: premierleague, laliga, seriea)</param>
+    /// <returns>Classificação com todas as linhas e informações de promoção</returns>
     [HttpGet("tournament/{tournamentName}/standings")]
     public async Task<IActionResult> GetStandings(string tournamentName)
     {
-        try 
+        try
         {
             var info = TournamentsInfo.GetTournamentInfo(tournamentName);
-            var standings = await _scraper.GetStandingsAsync(info.tournamentId, info.seasonId);
-            return Ok(standings);
+
+            var standings = await _db.Standings
+                .Include(s => s.Promotions)
+                .Where(s => s.TournamentId == info.tournamentId && s.SeasonId == info.seasonId)
+                .OrderBy(s => s.Position)
+                .ToListAsync();
+
+            if (!standings.Any())
+            {
+                return Ok(new
+                {
+                    tournament = info.name,
+                    message = "Classificação ainda não foi sincronizada. Será atualizada após o primeiro jogo ser enriquecido.",
+                    rows = Array.Empty<object>()
+                });
+            }
+
+            // Monta resposta no mesmo formato que o frontend já espera
+            var response = standings.Select(s => new
+            {
+                Team = new { Id = s.TeamId, Name = s.TeamName },
+                Position = s.Position,
+                Matches = s.Matches,
+                Wins = s.Wins,
+                Draws = s.Draws,
+                Losses = s.Losses,
+                ScoresFor = s.GoalsFor,
+                ScoresAgainst = s.GoalsAgainst,
+                Points = s.Points,
+                ScoreDiffFormatted = (s.GoalDifference >= 0 ? "+" : "") + s.GoalDifference.ToString(),
+                Promotion = s.Promotions.Any()
+                    ? new { Id = s.Promotions.First().PromotionId, Text = s.Promotions.First().Text }
+                    : null,
+                UpdatedAt = s.UpdatedAt
+            });
+
+            return Ok(response);
         }
-        catch (Exception ex)
+        catch (ArgumentException ex)
         {
             return BadRequest(new { error = ex.Message });
         }

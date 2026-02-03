@@ -10,8 +10,10 @@ public class AppDbContext : DbContext
 
     public DbSet<DbMatch> Matches { get; set; }
     public DbSet<DbMatchStat> MatchStats { get; set; }
-    public DbSet<DbIncident> Incidents { get; set; } // NOVO DbSet para incidentes
+    public DbSet<DbIncident> Incidents { get; set; }
     public DbSet<DbRoundState> RoundStates { get; set; }
+    public DbSet<DbStanding> Standings { get; set; }
+    public DbSet<DbStandingPromotion> StandingPromotions { get; set; } 
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -38,6 +40,24 @@ public class AppDbContext : DbContext
 
         modelBuilder.Entity<DbMatch>()
         .HasIndex(m => new { m.TournamentId, m.Round, m.ProcessingStatus });
+
+        // === Standings ===
+        // Chave única: um time aparece uma vez por campeonato/temporada
+        modelBuilder.Entity<DbStanding>()
+            .HasIndex(s => new { s.TournamentId, s.SeasonId, s.TeamId })
+            .IsUnique();
+
+        // Índice para buscar classificação inteira de um campeonato
+        modelBuilder.Entity<DbStanding>()
+            .HasIndex(s => new { s.TournamentId, s.SeasonId, s.Position });
+
+        // === StandingPromotions ===
+        // Relacionamento: cada standing pode ter 0 ou mais promoções
+        modelBuilder.Entity<DbStandingPromotion>()
+            .HasOne(p => p.Standing)
+            .WithMany(s => s.Promotions)
+            .HasForeignKey(p => p.StandingId)
+            .OnDelete(DeleteBehavior.Cascade);
     }
 }
 
@@ -146,4 +166,65 @@ public class DbRoundState
     // Propriedade auxiliar (não mapeada no banco) para lógica de negócio
     [NotMapped]
     public bool ShouldBeMarkedComplete => (EnrichedMatches + CancelledMatches) == TotalMatches;
+}
+/// <summary>
+/// Representa uma linha da classificação de um campeonato.
+/// Uma linha por time por campeonato/temporada.
+/// </summary>
+public class DbStanding
+{
+    public int Id { get; set; }
+
+    // Identificação do campeonato
+    public int TournamentId { get; set; }
+    public int SeasonId { get; set; }
+
+    // Identificação do time
+    public int TeamId { get; set; }
+    public string TeamName { get; set; } = string.Empty;
+
+    // Classificação
+    public int Position { get; set; }
+
+    // Estatísticas
+    public int Matches { get; set; }
+    public int Wins { get; set; }
+    public int Draws { get; set; }
+    public int Losses { get; set; }
+    public int GoalsFor { get; set; }
+    public int GoalsAgainst { get; set; }
+    public int GoalDifference { get; set; }
+    public int Points { get; set; }
+
+    // Timestamp da última atualização desta classificação
+    public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+
+    // Relacionamento: promoções/rebaixamentos do time nessa classificação
+    public List<DbStandingPromotion> Promotions { get; set; } = new();
+}
+
+/// <summary>
+/// Representa uma informação de promoção ou rebaixamento associada a um time na classificação.
+/// Exemplo: "Classificado para Champions League", "Zona de rebaixamento", etc.
+/// Um mesmo time pode ter mais de uma faixa (ex: classificado para CL e também para Europa League
+/// se ficar em determinada posição).
+/// </summary>
+public class DbStandingPromotion
+{
+    public int Id { get; set; }
+    public int StandingId { get; set; } // FK para DbStanding
+
+    /// <summary>
+    /// ID da promoção conforme vem da API do SofaScore.
+    /// Usado para identificar o tipo (ex: Champions League, Europa League, Rebaixamento).
+    /// </summary>
+    public int PromotionId { get; set; }
+
+    /// <summary>
+    /// Texto descritivo da promoção (ex: "Champions League", "Rebaixamento").
+    /// </summary>
+    public string Text { get; set; } = string.Empty;
+
+    // Relacionamento
+    public DbStanding Standing { get; set; } = null!;
 }
