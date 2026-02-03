@@ -198,4 +198,119 @@ public class MatchesController : ControllerBase
             return BadRequest(new { error = ex.Message });
         }
     }
+    /// <summary>
+    /// [ADMIN] Popula inicialmente a tabela Standings para todos os torneios configurados.
+    /// Este endpoint deve ser executado apenas localmente via Swagger.
+    /// </summary>
+    [HttpPost("admin/sync-all-standings")]
+    public async Task<IActionResult> SyncAllStandings()
+    {
+        try
+        {
+            var results = new List<object>();
+
+            foreach (var tournament in TournamentsInfo.AllTournaments.List)
+            {
+                // Verifica se já existem dados para este torneio
+                var existingCount = await _db.Standings
+                    .CountAsync(s => s.TournamentId == tournament.tournamentId 
+                                && s.SeasonId == tournament.seasonId);
+
+                if (existingCount > 0)
+                {
+                    results.Add(new
+                    {
+                        Tournament = tournament.name,
+                        Status = "Skipped",
+                        Message = $"Já possui {existingCount} registros",
+                        TournamentId = tournament.tournamentId,
+                        SeasonId = tournament.seasonId
+                    });
+                    continue;
+                }
+
+                // Busca dados via scraping
+                var standingsTable = await _scraper.GetStandingsAsync(
+                    tournament.tournamentId, 
+                    tournament.seasonId
+                );
+
+                if (standingsTable?.Rows == null || !standingsTable.Rows.Any())
+                {
+                    results.Add(new
+                    {
+                        Tournament = tournament.name,
+                        Status = "Error",
+                        Message = "Nenhum dado retornado pelo scraper",
+                        TournamentId = tournament.tournamentId,
+                        SeasonId = tournament.seasonId
+                    });
+                    continue;
+                }
+
+                // Insere na tabela Standings
+                foreach (var row in standingsTable.Rows)
+                {
+                    var standing = new DbStanding
+                    {
+                        TournamentId = tournament.tournamentId,
+                        SeasonId = tournament.seasonId,
+                        TeamId = row.Team.Id,
+                        TeamName = row.Team.Name,
+                        Position = row.Position,
+                        Matches = row.Matches,
+                        Wins = row.Wins,
+                        Draws = row.Draws,
+                        Losses = row.Losses,
+                        GoalsFor = row.ScoresFor,
+                        GoalsAgainst = row.ScoresAgainst,
+                        GoalDifference = row.ScoresFor - row.ScoresAgainst,
+                        Points = row.Points,
+                        UpdatedAt = DateTime.UtcNow
+                    };
+
+                    _db.Standings.Add(standing);
+
+                    // Adiciona promoções/rebaixamentos
+                    if (row.Promotion != null)
+                    {
+                        var promotion = new DbStandingPromotion
+                        {
+                            Standing = standing,
+                            PromotionId = row.Promotion.Id,
+                            Text = row.Promotion.Text
+                        };
+                        _db.StandingPromotions.Add(promotion);
+                    }
+                }
+
+                await _db.SaveChangesAsync();
+
+                results.Add(new
+                {
+                    Tournament = tournament.name,
+                    Status = "Success",
+                    Message = $"{standingsTable.Rows.Count} times inseridos",
+                    TournamentId = tournament.tournamentId,
+                    SeasonId = tournament.seasonId
+                });
+
+                // Delay para não sobrecarregar o scraper
+                await Task.Delay(1000);
+            }
+
+            return Ok(new
+            {
+                Message = "Sincronização completa",
+                Timestamp = DateTime.UtcNow,
+                Results = results
+            });
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"{ex}", "Erro ao sincronizar standings");
+            return StatusCode(500, new { error = ex.Message });
+        }
+    }
+
 }

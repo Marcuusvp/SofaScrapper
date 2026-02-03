@@ -25,37 +25,34 @@ public class SofaScraper : IAsyncDisposable
         _logger = logger;
     }
 
-    public async Task InitializeAsync()
+public async Task InitializeAsync()
+{
+    await _initLock.WaitAsync();
+    try
     {
-        await _initLock.WaitAsync();
-        try
-        {
-            await CleanupAsync();
+        await CleanupAsync();
 
-            var browserArgs = new List<string>
+        // 🎯 Detecta o ambiente de execução
+        bool isLinux = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("PUPPETEER_EXECUTABLE_PATH"));
+        bool isWindows = OperatingSystem.IsWindows();
+
+        List<string> browserArgs;
+
+        if (isLinux)
+        {
+            // 🐧 LINUX (Railway): Flags agressivas para economia de memória
+            _logger?.LogInformation("🐧 Railway Mode: Flags Linux otimizadas ativas.");
+            browserArgs = new List<string>
             {
-                // CRÍTICO: Força single-process (evita criar múltiplos processos Chrome)
                 "--single-process",
-                
-                // Segurança (obrigatório em containers)
                 "--no-sandbox",
                 "--disable-setuid-sandbox",
-                
-                // Memória compartilhada (Docker)
                 "--disable-dev-shm-usage",
-                
-                // GPU/Renderização
                 "--disable-gpu",
                 "--disable-software-rasterizer",
-                
-                // JavaScript Engine (CRÍTICO - reduz heap V8)
-                "--js-flags=--max-old-space-size=96", // 96MB ao invés de 128MB
-                
-                // Limitação de processos
-                "--renderer-process-limit=1", // Apenas 1 renderer
+                "--js-flags=--max-old-space-size=96",
+                "--renderer-process-limit=1",
                 "--disable-dev-tools",
-                
-                // Desabilitar recursos desnecessários
                 "--disable-extensions",
                 "--disable-background-networking",
                 "--disable-background-timer-throttling",
@@ -70,7 +67,7 @@ public class SofaScraper : IAsyncDisposable
                 "--disable-prompt-on-repost",
                 "--disable-renderer-backgrounding",
                 "--disable-sync",
-                "--disable-web-security", // OK para scraping interno
+                "--disable-web-security",
                 "--force-color-profile=srgb",
                 "--metrics-recording-only",
                 "--mute-audio",
@@ -79,49 +76,69 @@ public class SofaScraper : IAsyncDisposable
                 "--no-pings",
                 "--password-store=basic",
                 "--use-mock-keychain",
-                "--memory-pressure-off", // Ignora avisos de memória baixa
-                "--disk-cache-size=1", // Cache mínimo
+                "--memory-pressure-off",
+                "--disk-cache-size=1",
                 "--media-cache-size=1"
             };
-
-            var launchOptions = new LaunchOptions { Headless = true };
-            var executablePath = Environment.GetEnvironmentVariable("PUPPETEER_EXECUTABLE_PATH");
-
-            if (!string.IsNullOrEmpty(executablePath))
-            {
-                _logger?.LogInformation("🐧 Railway Mode: Flags otimizadas ativas.");
-                launchOptions.ExecutablePath = executablePath;
-            }
-            else
-            {
-                _logger?.LogInformation("💻 Local Mode: Config padrão.");
-                var browserFetcher = new BrowserFetcher();
-                await browserFetcher.DownloadAsync();
-            }
-
-            launchOptions.Args = browserArgs.ToArray();
-            _browser = await Puppeteer.LaunchAsync(launchOptions);
-            
-            _page = await _browser.NewPageAsync();
-            _page.DefaultTimeout = 90000; // Timeout maior para evitar falsos positivos
-
-            // User Agent genérico para evitar bloqueio
-            await _page.SetUserAgentAsync("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
-
-            _lastInitialization = DateTime.UtcNow;
-            _logger?.LogInformation("✅ Navegador iniciado (Sessão Otimizada)!");
         }
-        catch (Exception ex)
+        else
         {
-            _logger?.LogError(ex, "❌ Erro fatal ao iniciar navegador");
-            await CleanupAsync();
-            throw;
+            // 💻 WINDOWS (Local): Flags conservadoras para estabilidade
+            _logger?.LogInformation("💻 Windows Mode: Flags estáveis ativas.");
+            browserArgs = new List<string>
+            {
+                "--disable-gpu",
+                "--disable-dev-shm-usage",
+                "--disable-extensions",
+                "--disable-background-networking",
+                "--disable-default-apps",
+                "--disable-sync",
+                "--mute-audio",
+                "--no-first-run",
+                "--no-default-browser-check"
+            };
         }
-        finally
+
+        var launchOptions = new LaunchOptions 
+        { 
+            Headless = true,
+            Args = browserArgs.ToArray()
+        };
+
+        var executablePath = Environment.GetEnvironmentVariable("PUPPETEER_EXECUTABLE_PATH");
+
+        if (!string.IsNullOrEmpty(executablePath))
         {
-            _initLock.Release();
+            launchOptions.ExecutablePath = executablePath;
         }
+        else
+        {
+            var browserFetcher = new BrowserFetcher();
+            await browserFetcher.DownloadAsync();
+        }
+
+        _browser = await Puppeteer.LaunchAsync(launchOptions);
+
+        _page = await _browser.NewPageAsync();
+        _page.DefaultTimeout = 90000;
+
+        await _page.SetUserAgentAsync("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+
+        _lastInitialization = DateTime.UtcNow;
+        _logger?.LogInformation("✅ Navegador iniciado (Sessão Otimizada)!");
     }
+    catch (Exception ex)
+    {
+        _logger?.LogError(ex, "❌ Erro fatal ao iniciar navegador");
+        await CleanupAsync();
+        throw;
+    }
+    finally
+    {
+        _initLock.Release();
+    }
+}
+
 
     // =================================================================================================
     // MÉTODOS PÚBLICOS (Mantidos 100% iguais para não quebrar API/Worker)
