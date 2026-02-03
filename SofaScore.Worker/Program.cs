@@ -1,33 +1,42 @@
 using SofaScore.Shared.Data;
-using SofaScore.Shared.Services; // Ajuste conforme seus namespaces
+using SofaScore.Shared.Services;
 using Microsoft.EntityFrameworkCore;
 using SofaScore.Worker.Services;
 
 var builder = Host.CreateApplicationBuilder(args);
 
-// 1. Configurar Banco de Dados (Mesma string de conexão da API)
+// 1. Configurar Banco de Dados
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseNpgsql(connectionString));
 
-// 2. Registrar Serviços do Shared
-builder.Services.AddScoped<SofaScraper>();
+Console.WriteLine("✅ DbContext registrado");
+
+// 2. Registrar SofaScraper
 builder.Services.AddScoped<SofaScraper>(sp =>
 {
     var logger = sp.GetRequiredService<ILogger<SofaScraper>>();
     return new SofaScraper(logger);
 });
 
-// 3. Registrar o Worker
+Console.WriteLine("✅ SofaScraper registrado");
+
+// 3. Registrar RoundScheduler ← CRÍTICO - ESTAVA FALTANDO
+builder.Services.AddScoped<RoundScheduler>();
+
+Console.WriteLine("✅ RoundScheduler registrado");
+
+// 4. Registrar o Worker
 builder.Services.AddHostedService<MatchEnrichmentWorker>();
+
+Console.WriteLine("✅ MatchEnrichmentWorker registrado");
 
 var host = builder.Build();
 
-// 4. Garantir criação do banco ao iniciar (opcional, mas útil no worker)
+// 5. Garantir criação do banco ao iniciar
 using (var scope = host.Services.CreateScope())
 {
     var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-    // Evite MigrateAsync se a API já faz isso, mas EnsureCreated é seguro
     await context.Database.EnsureCreatedAsync(); 
 }
 
