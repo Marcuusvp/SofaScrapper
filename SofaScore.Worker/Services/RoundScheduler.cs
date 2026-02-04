@@ -8,6 +8,7 @@ namespace SofaScore.Worker.Services;
 /// <summary>
 /// Responsável por identificar e buscar a próxima rodada de cada campeonato de forma proativa.
 /// Garante que os dados da próxima rodada estejam disponíveis antes de serem consultados pela API.
+/// Suporta tanto ligas (rodadas sequenciais) quanto torneios de copa (fases eliminatórias).
 /// </summary>
 public class RoundScheduler
 {
@@ -37,15 +38,23 @@ public class RoundScheduler
         {
             try
             {
-                await CheckAndFetchNextRoundForTournamentAsync(
-                    tournament.tournamentId,
-                    tournament.seasonId,
-                    tournament.totalRounds,
-                    tournament.name,
-                    ct
-                );
+                // ✅ Champions League tem lógica especial (fase de liga + eliminatórias)
+                if (tournament.tournamentId == TournamentsInfo.ChampionsLeague.TournamentId)
+                {
+                    await HandleChampionsLeagueAsync(ct);
+                }
+                else
+                {
+                    // ✅ Ligas normais (rodadas sequenciais)
+                    await CheckAndFetchNextRoundForTournamentAsync(
+                        tournament.tournamentId,
+                        tournament.seasonId,
+                        tournament.totalRounds,
+                        tournament.name,
+                        ct
+                    );
+                }
 
-                // Delay entre campeonatos para não sobrecarregar o scraper
                 await Task.Delay(500, ct);
             }
             catch (Exception ex)
@@ -61,11 +70,270 @@ public class RoundScheduler
     }
 
     /// <summary>
-    /// Verifica e busca a próxima rodada para um campeonato específico.
-    /// Lógica:
-    /// 1. Descobre qual é a rodada atual (maior rodada que tem jogos)
-    /// 2. Verifica se a rodada atual está "resolvida" (todos jogos em estado terminal)
-    /// 3. Se sim, busca a próxima rodada via scraper e salva no banco
+    /// Lógica especial para Champions League: fase de liga (1-8) + fases eliminatórias.
+    /// </summary>
+    private async Task HandleChampionsLeagueAsync(CancellationToken ct)
+    {
+        int tournamentId = TournamentsInfo.ChampionsLeague.TournamentId;
+        int seasonId = TournamentsInfo.ChampionsLeague.SeasonId;
+        string tournamentName = TournamentsInfo.ChampionsLeague.Name;
+
+        // 1. Busca fase de liga (rodadas 1-8) normalmente
+        var leaguePhaseRounds = await _db.Matches
+            .Where(m => m.TournamentId == tournamentId && 
+                       m.SeasonId == seasonId && 
+                       m.Round >= TournamentsInfo.ChampionsLeague.LeaguePhaseStart && 
+                       m.Round <= TournamentsInfo.ChampionsLeague.LeaguePhaseEnd)
+            .Select(m => m.Round)
+            .Distinct()
+            .ToListAsync(ct);
+
+        if (leaguePhaseRounds.Any())
+        {
+            var maxLeagueRound = leaguePhaseRounds.Max();
+
+            // Se ainda estamos na fase de liga (rodadas < 8)
+            if (maxLeagueRound < TournamentsInfo.ChampionsLeague.LeaguePhaseEnd)
+            {
+                bool isCurrentRoundResolved = await IsRoundResolvedAsync(tournamentId, seasonId, maxLeagueRound, ct);
+
+                if (isCurrentRoundResolved)
+                {
+                    int nextRound = maxLeagueRound + 1;
+
+                    if (nextRound <= TournamentsInfo.ChampionsLeague.LeaguePhaseEnd)
+                    {
+                        bool exists = await _db.Matches.AnyAsync(m => 
+                            m.TournamentId == tournamentId && 
+                            m.SeasonId == seasonId && 
+                            m.Round == nextRound, ct);
+
+                        if (!exists)
+                        {
+                            _logger.LogInformation("🔍 {Tournament}: Buscando rodada {Round} (fase de liga)...", 
+                                tournamentName, nextRound);
+                            await FetchLeaguePhaseRoundAsync(tournamentId, seasonId, nextRound, ct);
+                        }
+                    }
+                }
+                return; // Ainda na fase de liga, não buscar eliminatórias
+            }
+
+            // Se rodada 8 está completa, verificar fases eliminatórias
+            if (maxLeagueRound == TournamentsInfo.ChampionsLeague.LeaguePhaseEnd)
+            {
+                bool isLeaguePhaseComplete = await IsRoundResolvedAsync(tournamentId, seasonId, maxLeagueRound, ct);
+
+                if (isLeaguePhaseComplete)
+                {
+                    await HandleKnockoutPhasesAsync(tournamentId, seasonId, tournamentName, ct);
+                }
+            }
+        }
+        else
+        {
+            // Banco vazio, buscar rodada 1
+            _logger.LogWarning("⚠️ {Tournament}: Nenhuma rodada encontrada no banco. Campeonato pode não estar inicializado.", 
+                tournamentName);
+        }
+    }
+
+    /// <summary>
+    /// Gerencia as fases eliminatórias da Champions League (Playoff, Oitavas, Quartas, Semi, Final).
+    /// </summary>
+    private async Task HandleKnockoutPhasesAsync(int tournamentId, int seasonId, string tournamentName, CancellationToken ct)
+    {
+        // Descobre qual é a última fase eliminatória que temos no banco
+        var knockoutRoundIds = TournamentsInfo.ChampionsLeague.KnockoutPhases.Select(p => p.RoundId).ToList();
+
+        var existingKnockoutRounds = await _db.Matches
+            .Where(m => m.TournamentId == tournamentId && 
+                       m.SeasonId == seasonId && 
+                       knockoutRoundIds.Contains(m.Round))
+            .Select(m => m.Round)
+            .Distinct()
+            .ToListAsync(ct);
+
+        if (!existingKnockoutRounds.Any())
+        {
+            // Nenhuma fase eliminatória no banco, buscar a primeira (Playoff)
+            var firstPhase = TournamentsInfo.ChampionsLeague.KnockoutPhases.First();
+            await TryFetchKnockoutPhaseAsync(tournamentId, seasonId, firstPhase, tournamentName, ct);
+            return;
+        }
+
+        // Pega a última fase que temos
+        var lastPhaseRoundId = existingKnockoutRounds.Max();
+        var lastPhaseIndex = TournamentsInfo.ChampionsLeague.KnockoutPhases
+            .FindIndex(p => p.RoundId == lastPhaseRoundId);
+
+        if (lastPhaseIndex == -1)
+        {
+            _logger.LogWarning("⚠️ {Tournament}: Fase eliminatória com roundId {RoundId} não encontrada no mapeamento.", 
+                tournamentName, lastPhaseRoundId);
+            return;
+        }
+
+        // Verifica se a última fase está completa
+        bool isLastPhaseComplete = await IsRoundResolvedAsync(tournamentId, seasonId, lastPhaseRoundId, ct);
+
+        if (!isLastPhaseComplete)
+        {
+            _logger.LogDebug("📍 {Tournament}: Fase eliminatória atual (round {RoundId}) ainda não está completa.", 
+                tournamentName, lastPhaseRoundId);
+            return;
+        }
+
+        // Se está completa, tenta buscar a próxima fase
+        int nextPhaseIndex = lastPhaseIndex + 1;
+
+        if (nextPhaseIndex >= TournamentsInfo.ChampionsLeague.KnockoutPhases.Count)
+        {
+            _logger.LogInformation("🏆 {Tournament}: Todas as fases eliminatórias foram processadas (Final completa).", 
+                tournamentName);
+            return;
+        }
+
+        var nextPhase = TournamentsInfo.ChampionsLeague.KnockoutPhases[nextPhaseIndex];
+        await TryFetchKnockoutPhaseAsync(tournamentId, seasonId, nextPhase, tournamentName, ct);
+    }
+
+    /// <summary>
+    /// Tenta buscar uma fase eliminatória específica (Playoff, Oitavas, etc).
+    /// </summary>
+    private async Task TryFetchKnockoutPhaseAsync(
+        int tournamentId,
+        int seasonId,
+        KnockoutPhase phase,
+        string tournamentName,
+        CancellationToken ct)
+    {
+        // Verifica se já existe
+        bool exists = await _db.Matches.AnyAsync(m => 
+            m.TournamentId == tournamentId && 
+            m.SeasonId == seasonId && 
+            m.Round == phase.RoundId, ct);
+
+        if (exists)
+        {
+            _logger.LogDebug("✅ {Tournament}: {Phase} (round {RoundId}) já existe no banco.", 
+                tournamentName, phase.Name, phase.RoundId);
+            return;
+        }
+
+        _logger.LogInformation("🔍 {Tournament}: Buscando {Phase} (round {RoundId})...", 
+            tournamentName, phase.Name, phase.RoundId);
+
+        try
+        {
+            var matches = await _scraper.GetQualificationMatchesAsync(
+                tournamentId,
+                seasonId,
+                phase.RoundId,
+                phase.Slug,
+                phase.Prefix
+            );
+
+            if (!matches.Any())
+            {
+                _logger.LogWarning("⚠️ {Tournament}: {Phase} não retornou jogos. Chaveamento pode não estar disponível ainda.", 
+                    tournamentName, phase.Name);
+                return;
+            }
+
+            // Salva os jogos no banco
+            foreach (var match in matches)
+            {
+                var dbMatch = new DbMatch
+                {
+                    Id = match.Id,
+                    TournamentId = tournamentId,
+                    SeasonId = seasonId,
+                    Round = phase.RoundId,
+                    HomeTeam = match.HomeTeam,
+                    AwayTeam = match.AwayTeam,
+                    HomeScore = match.HomeScore ?? 0,
+                    AwayScore = match.AwayScore ?? 0,
+                    Status = match.Status,
+                    StartTimestamp = match.StartTimestamp,
+                    ProcessingStatus = match.Status switch
+                    {
+                        "Live" or "Inplay" => MatchProcessingStatus.InProgress,
+                        "Postponed" => MatchProcessingStatus.Postponed,
+                        "Cancelled" or "Canceled" => MatchProcessingStatus.Cancelled,
+                        "Ended" or "Finished" => MatchProcessingStatus.Pending,
+                        _ => MatchProcessingStatus.Pending
+                    }
+                };
+
+                _db.Matches.Add(dbMatch);
+            }
+
+            await _db.SaveChangesAsync(ct);
+
+            _logger.LogInformation("✅ {Tournament}: {Phase} adicionada ({Count} jogos)", 
+                tournamentName, phase.Name, matches.Count);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Erro ao buscar {Phase} de {Tournament}", 
+                phase.Name, tournamentName);
+        }
+    }
+
+    /// <summary>
+    /// Busca uma rodada da fase de liga (1-8) usando API padrão.
+    /// </summary>
+    private async Task FetchLeaguePhaseRoundAsync(int tournamentId, int seasonId, int round, CancellationToken ct)
+    {
+        try
+        {
+            var matches = await _scraper.GetMatchesAsync(tournamentId, seasonId, round);
+
+            if (!matches.Any())
+            {
+                _logger.LogWarning("⚠️ Champions League: Rodada {Round} não retornou jogos.", round);
+                return;
+            }
+
+            foreach (var match in matches)
+            {
+                var dbMatch = new DbMatch
+                {
+                    Id = match.Id,
+                    TournamentId = tournamentId,
+                    SeasonId = seasonId,
+                    Round = round,
+                    HomeTeam = match.HomeTeam,
+                    AwayTeam = match.AwayTeam,
+                    HomeScore = match.HomeScore ?? 0,
+                    AwayScore = match.AwayScore ?? 0,
+                    Status = match.Status,
+                    StartTimestamp = match.StartTimestamp,
+                    ProcessingStatus = match.Status switch
+                    {
+                        "Live" or "Inplay" => MatchProcessingStatus.InProgress,
+                        "Postponed" => MatchProcessingStatus.Postponed,
+                        "Cancelled" or "Canceled" => MatchProcessingStatus.Cancelled,
+                        "Ended" or "Finished" => MatchProcessingStatus.Pending,
+                        _ => MatchProcessingStatus.Pending
+                    }
+                };
+
+                _db.Matches.Add(dbMatch);
+            }
+
+            await _db.SaveChangesAsync(ct);
+            _logger.LogInformation("✅ Champions League: Rodada {Round} adicionada ({Count} jogos)", round, matches.Count);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "❌ Erro ao buscar rodada {Round} da Champions League", round);
+        }
+    }
+
+    /// <summary>
+    /// Verifica e busca a próxima rodada para um campeonato de liga (rodadas sequenciais).
     /// </summary>
     private async Task CheckAndFetchNextRoundForTournamentAsync(
         int tournamentId,
@@ -74,7 +342,6 @@ public class RoundScheduler
         string tournamentName,
         CancellationToken ct)
     {
-        // 1. Descobre qual é a rodada atual (maior rodada que tem jogos)
         var rounds = await _db.Matches
             .Where(m => m.TournamentId == tournamentId && m.SeasonId == seasonId)
             .Select(m => m.Round)
@@ -83,67 +350,44 @@ public class RoundScheduler
 
         if (!rounds.Any())
         {
-            _logger.LogWarning(
-                "⚠️ {Tournament}: Nenhuma rodada encontrada no banco. Campeonato pode não estar inicializado.",
-                tournamentName
-            );
+            _logger.LogWarning("⚠️ {Tournament}: Nenhuma rodada encontrada no banco. Campeonato pode não estar inicializado.", 
+                tournamentName);
             return;
         }
 
         var currentRound = rounds.Max();
-
-        // 2. Verifica se a rodada atual está "resolvida"
-        bool isCurrentRoundResolved = await IsRoundResolvedAsync(
-            tournamentId, 
-            seasonId, 
-            currentRound, 
-            ct
-        );
+        bool isCurrentRoundResolved = await IsRoundResolvedAsync(tournamentId, seasonId, currentRound, ct);
 
         if (!isCurrentRoundResolved)
         {
-            _logger.LogDebug(
-                "📍 {Tournament}: Rodada {Round} ainda não está completa. Aguardando...",
-                tournamentName, currentRound
-            );
+            _logger.LogDebug("📍 {Tournament}: Rodada {Round} ainda não está completa. Aguardando...", 
+                tournamentName, currentRound);
             return;
         }
 
-        // 3. Calcula a próxima rodada
         int nextRound = currentRound + 1;
 
         if (nextRound > totalRounds)
         {
-            _logger.LogInformation(
-                "🏁 {Tournament}: Todas as {Total} rodadas já foram processadas.",
-                tournamentName, totalRounds
-            );
+            _logger.LogInformation("🏁 {Tournament}: Todas as {Total} rodadas já foram processadas.", 
+                tournamentName, totalRounds);
             return;
         }
 
-        // 4. Verifica se a próxima rodada já existe no banco
-        bool nextRoundExists = await _db.Matches
-            .AnyAsync(m => 
-                m.TournamentId == tournamentId && 
-                m.SeasonId == seasonId && 
-                m.Round == nextRound,
-                ct
-            );
+        bool nextRoundExists = await _db.Matches.AnyAsync(m => 
+            m.TournamentId == tournamentId && 
+            m.SeasonId == seasonId && 
+            m.Round == nextRound, ct);
 
         if (nextRoundExists)
         {
-            _logger.LogDebug(
-                "✅ {Tournament}: Rodada {Round} já existe no banco.",
-                tournamentName, nextRound
-            );
+            _logger.LogDebug("✅ {Tournament}: Rodada {Round} já existe no banco.", 
+                tournamentName, nextRound);
             return;
         }
 
-        // 5. Busca a próxima rodada via scraper
-        _logger.LogInformation(
-            "🔍 {Tournament}: Buscando rodada {Round}...",
-            tournamentName, nextRound
-        );
+        _logger.LogInformation("🔍 {Tournament}: Buscando rodada {Round}...", 
+            tournamentName, nextRound);
 
         try
         {
@@ -151,14 +395,11 @@ public class RoundScheduler
 
             if (!matches.Any())
             {
-                _logger.LogWarning(
-                    "⚠️ {Tournament}: Rodada {Round} não retornou jogos. Pode não estar disponível ainda.",
-                    tournamentName, nextRound
-                );
+                _logger.LogWarning("⚠️ {Tournament}: Rodada {Round} não retornou jogos. Pode não estar disponível ainda.", 
+                    tournamentName, nextRound);
                 return;
             }
 
-            // 6. Salva os jogos no banco
             foreach (var match in matches)
             {
                 var dbMatch = new DbMatch
@@ -188,26 +429,18 @@ public class RoundScheduler
 
             await _db.SaveChangesAsync(ct);
 
-            _logger.LogInformation(
-                "✅ {Tournament}: Rodada {Round} adicionada ({Count} jogos)",
-                tournamentName, nextRound, matches.Count
-            );
+            _logger.LogInformation("✅ {Tournament}: Rodada {Round} adicionada ({Count} jogos)", 
+                tournamentName, nextRound, matches.Count);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex,
-                "❌ Erro ao buscar rodada {Round} de {Tournament}",
-                nextRound, tournamentName
-            );
+            _logger.LogError(ex, "❌ Erro ao buscar rodada {Round} de {Tournament}", 
+                nextRound, tournamentName);
         }
     }
 
     /// <summary>
     /// Verifica se uma rodada está "resolvida" (todos jogos em estado terminal).
-    /// Uma rodada está resolvida quando todos os jogos estão:
-    /// - Enriched (finalizado e processado)
-    /// - Cancelled (cancelado)
-    /// - Postponed (adiado - será um novo jogo em outra rodada)
     /// </summary>
     private async Task<bool> IsRoundResolvedAsync(
         int tournamentId,
@@ -225,7 +458,6 @@ public class RoundScheduler
         if (!matches.Any())
             return false;
 
-        // Uma rodada está resolvida quando todos os jogos estão em estado terminal
         var terminalStatuses = new[]
         {
             MatchProcessingStatus.Enriched,
@@ -233,8 +465,6 @@ public class RoundScheduler
             MatchProcessingStatus.Postponed
         };
 
-        bool allResolved = matches.All(m => terminalStatuses.Contains(m.ProcessingStatus));
-
-        return allResolved;
+        return matches.All(m => terminalStatuses.Contains(m.ProcessingStatus));
     }
 }

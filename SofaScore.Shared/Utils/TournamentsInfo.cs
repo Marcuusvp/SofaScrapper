@@ -69,13 +69,17 @@ public static class TournamentsInfo
         
         // As rodadas de mata-mata no SofaScore geralmente seguem sequencialmente ou usam IDs negativos/específicos.
         // Assumindo sequencial para a nova estrutura:
-        public const int KnockoutPlayoffs = 9; // 16-avos
-        public const int RoundOf16 = 10;
-        public const int QuarterFinals = 11; 
-        public const int SemiFinals = 12;
-        public const int Final = 13;
+        public static readonly List<KnockoutPhase> KnockoutPhases = new()
+        {
+            new(636, "playoff-round", null, "Playoff Round"),
+            new(5, "round-of-16", null, "Round of 16"),
+            new(27, "quarterfinals", null, "Quarter Finals"),
+            new(28, "semifinals", null, "Semi Finals"),
+            new(29, "final", null, "Final")
+        };
     }
-    
+    public record KnockoutPhase(int RoundId, string Slug, string? Prefix, string Name);
+
     // Método helper para obter informações de um campeonato
     public static (int tournamentId, int seasonId, int totalRounds, string name) GetTournamentInfo(string tournament)
     {
