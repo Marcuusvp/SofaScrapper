@@ -254,29 +254,43 @@ public async Task<List<Match>> GetMatchesAsync(int tournamentId, int seasonId, i
     {
         return await ExecuteWithRetryAsync(async (page) =>
         {
-             await page.GoToAsync($"https://www.sofascore.com/tournament/{tournamentId}", new NavigationOptions { Timeout = 60000, WaitUntil = new[] { WaitUntilNavigation.DOMContentLoaded } });
+            await page.GoToAsync($"https://www.sofascore.com/tournament/{tournamentId}", 
+                new NavigationOptions { Timeout = 60000, WaitUntil = new[] { WaitUntilNavigation.DOMContentLoaded } });
 
-             var apiUrl = prefix != null
+            var apiUrl = prefix != null
                 ? $"https://www.sofascore.com/api/v1/unique-tournament/{tournamentId}/season/{seasonId}/events/round/{round}/slug/{slug}/prefix/{prefix}"
                 : $"https://www.sofascore.com/api/v1/unique-tournament/{tournamentId}/season/{seasonId}/events/round/{round}/slug/{slug}";
-            
-             var json = await FetchJsonFromPage(page, apiUrl);
-             var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
-             var response = JsonSerializer.Deserialize<ApiResponse>(json, options);
-             
-             return response?.Events?.Select(e => new Match
-             {
-                 Id = e.Id,
-                 HomeTeam = e.HomeTeam?.Name ?? "N/A",
-                 AwayTeam = e.AwayTeam?.Name ?? "N/A",
-                 HomeScore = e.HomeScore?.Current,
-                 AwayScore = e.AwayScore?.Current,
-                 Status = e.Status?.Description ?? "N/A",
-                 StartTimestamp = e.StartTimestamp,
-                 StartTime = DateTimeOffset.FromUnixTimeSeconds(e.StartTimestamp).UtcDateTime
-             }).ToList() ?? new List<Match>();
+
+            var json = await FetchJsonFromPage(page, apiUrl);
+
+            // ✅ CORREÇÃO: Valida se o JSON é nulo ou vazio antes de deserializar
+            if (string.IsNullOrEmpty(json))
+            {
+                _logger?.LogWarning(
+                    "⚠️ GetQualificationMatchesAsync: API retornou vazio para tournamentId={TournamentId}, seasonId={SeasonId}, round={Round}, slug={Slug}. Fase pode não estar disponível ainda.", 
+                    tournamentId, seasonId, round, slug
+                );
+                return new List<Match>();
+            }
+
+            var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+            var response = JsonSerializer.Deserialize<ApiResponse>(json, options);
+
+            return response?.Events?.Select(e => new Match
+            {
+                Id = e.Id,
+                HomeTeam = e.HomeTeam?.Name ?? "N/A",
+                AwayTeam = e.AwayTeam?.Name ?? "N/A",
+                HomeScore = e.HomeScore?.Current,
+                AwayScore = e.AwayScore?.Current,
+                Status = e.Status?.Description ?? "N/A",
+                StartTimestamp = e.StartTimestamp,
+                StartTime = DateTimeOffset.FromUnixTimeSeconds(e.StartTimestamp).UtcDateTime
+            }).ToList() ?? new List<Match>();
         }, "GetQualificationMatchesAsync");
     }
+
+
     
     public async Task<StandingsTable?> GetStandingsAsync(int tournamentId, int seasonId)
     {

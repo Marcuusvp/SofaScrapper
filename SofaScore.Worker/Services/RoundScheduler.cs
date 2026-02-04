@@ -458,6 +458,14 @@ public class RoundScheduler
         if (!matches.Any())
             return false;
 
+        // ✅ ADICIONAR: Se nenhum jogo começou ainda (todos Not started), não considerar como "resolvido"
+        var hasStarted = matches.Any(m => m.Status != "Not started");
+        if (!hasStarted)
+        {
+            // Jogos existem mas ainda não começaram - não considerar fase como completa
+            return false;
+        }
+
         var terminalStatuses = new[]
         {
             MatchProcessingStatus.Enriched,
@@ -467,4 +475,5 @@ public class RoundScheduler
 
         return matches.All(m => terminalStatuses.Contains(m.ProcessingStatus));
     }
+
 }
