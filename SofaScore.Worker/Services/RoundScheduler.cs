@@ -143,13 +143,13 @@ public class RoundScheduler
     /// </summary>
     private async Task HandleKnockoutPhasesAsync(int tournamentId, int seasonId, string tournamentName, CancellationToken ct)
     {
-        // Descobre qual é a última fase eliminatória que temos no banco
+        // Descobre quais fases eliminatórias já existem no banco
         var knockoutRoundIds = TournamentsInfo.ChampionsLeague.KnockoutPhases.Select(p => p.RoundId).ToList();
 
         var existingKnockoutRounds = await _db.Matches
             .Where(m => m.TournamentId == tournamentId && 
-                       m.SeasonId == seasonId && 
-                       knockoutRoundIds.Contains(m.Round))
+                    m.SeasonId == seasonId && 
+                    knockoutRoundIds.Contains(m.Round))
             .Select(m => m.Round)
             .Distinct()
             .ToListAsync(ct);
@@ -162,25 +162,36 @@ public class RoundScheduler
             return;
         }
 
-        // Pega a última fase que temos
-        var lastPhaseRoundId = existingKnockoutRounds.Max();
-        var lastPhaseIndex = TournamentsInfo.ChampionsLeague.KnockoutPhases
-            .FindIndex(p => p.RoundId == lastPhaseRoundId);
+        // ✅ CORREÇÃO: Encontra a última fase NA ORDEM da lista KnockoutPhases
+        int lastPhaseIndex = -1;
+        for (int i = TournamentsInfo.ChampionsLeague.KnockoutPhases.Count - 1; i >= 0; i--)
+        {
+            var phase = TournamentsInfo.ChampionsLeague.KnockoutPhases[i];
+            if (existingKnockoutRounds.Contains(phase.RoundId))
+            {
+                lastPhaseIndex = i;
+                break;
+            }
+        }
 
         if (lastPhaseIndex == -1)
         {
-            _logger.LogWarning("⚠️ {Tournament}: Fase eliminatória com roundId {RoundId} não encontrada no mapeamento.", 
-                tournamentName, lastPhaseRoundId);
+            // Não deveria acontecer, mas por segurança busca a primeira fase
+            _logger.LogWarning("⚠️ {Tournament}: Fases eliminatórias encontradas no banco mas não correspondem ao mapeamento.", 
+                tournamentName);
             return;
         }
+
+        var lastPhase = TournamentsInfo.ChampionsLeague.KnockoutPhases[lastPhaseIndex];
+        var lastPhaseRoundId = lastPhase.RoundId;
 
         // Verifica se a última fase está completa
         bool isLastPhaseComplete = await IsRoundResolvedAsync(tournamentId, seasonId, lastPhaseRoundId, ct);
 
         if (!isLastPhaseComplete)
         {
-            _logger.LogDebug("📍 {Tournament}: Fase eliminatória atual (round {RoundId}) ainda não está completa.", 
-                tournamentName, lastPhaseRoundId);
+            _logger.LogDebug("📍 {Tournament}: {Phase} (round {RoundId}) ainda não está completa.", 
+                tournamentName, lastPhase.Name, lastPhaseRoundId);
             return;
         }
 
@@ -197,6 +208,7 @@ public class RoundScheduler
         var nextPhase = TournamentsInfo.ChampionsLeague.KnockoutPhases[nextPhaseIndex];
         await TryFetchKnockoutPhaseAsync(tournamentId, seasonId, nextPhase, tournamentName, ct);
     }
+
 
     /// <summary>
     /// Tenta buscar uma fase eliminatória específica (Playoff, Oitavas, etc).
