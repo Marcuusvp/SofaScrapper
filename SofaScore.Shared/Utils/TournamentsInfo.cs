@@ -1,74 +1,73 @@
 namespace SofaScoreScraper;
 
+// ✅ Record definido no namespace raiz (fora de classes)
+public record KnockoutPhase(int RoundId, string Slug, string? Prefix, string Name);
+
 public static class TournamentsInfo
 {
     public static class PremierLeague
     {
         public const int TournamentId = 17;
-        public const int SeasonId = 76986; // Temporada 2025/2026
+        public const int SeasonId = 76986;
         public const int TotalRounds = 38;
         public const string Name = "Premier League";
         public const string Country = "Inglaterra";
     }
-    
+
     public static class LaLiga
     {
         public const int TournamentId = 8;
-        public const int SeasonId = 77559; // Temporada 2025/2026
+        public const int SeasonId = 77559;
         public const int TotalRounds = 38;
         public const string Name = "La Liga";
         public const string Country = "Espanha";
     }
-    
+
     public static class SerieA
     {
         public const int TournamentId = 23;
-        public const int SeasonId = 76457; // Temporada 2025/2026
+        public const int SeasonId = 76457;
         public const int TotalRounds = 38;
         public const string Name = "Serie A";
         public const string Country = "Itália";
     }
-    
+
     public static class Ligue1
     {
         public const int TournamentId = 34;
-        public const int SeasonId = 77356; // Temporada 2025/2026
+        public const int SeasonId = 77356;
         public const int TotalRounds = 34;
         public const string Name = "Ligue 1";
         public const string Country = "França";
     }
-    
+
     public static class Bundesliga
     {
         public const int TournamentId = 35;
-        public const int SeasonId = 77333; // Temporada 2025/2026
+        public const int SeasonId = 77333;
         public const int TotalRounds = 34;
         public const string Name = "Bundesliga";
         public const string Country = "Alemanha";
     }
-    
+
     public static class Brasileirao
     {
         public const int TournamentId = 325;
-        public const int SeasonId = 87678; // Temporada 2026
+        public const int SeasonId = 87678;
         public const int TotalRounds = 38;
         public const string Name = "Brasileirão Série A";
         public const string Country = "Brasil";
     }
-    
+
     public static class ChampionsLeague
     {
         public const int TournamentId = 7;
-        // ATUALIZADO: ID extraído dos seus logs JSON (Temporada 25/26)
-        public const int SeasonId = 76953; 
+        public const int SeasonId = 76953;
         public const string Name = "Champions League";
-        
-        // NOVO FORMATO: Fase de Liga tem 8 rodadas
+
         public const int LeaguePhaseStart = 1;
         public const int LeaguePhaseEnd = 8;
-        
-        // As rodadas de mata-mata no SofaScore geralmente seguem sequencialmente ou usam IDs negativos/específicos.
-        // Assumindo sequencial para a nova estrutura:
+
         public static readonly List<KnockoutPhase> KnockoutPhases = new()
         {
             new(636, "playoff-round", null, "Playoff Round"),
@@ -78,9 +77,7 @@ public static class TournamentsInfo
             new(29, "final", null, "Final")
         };
     }
-    public record KnockoutPhase(int RoundId, string Slug, string? Prefix, string Name);
 
-    // Método helper para obter informações de um campeonato
     public static (int tournamentId, int seasonId, int totalRounds, string name) GetTournamentInfo(string tournament)
     {
         return tournament.ToLower() switch
@@ -95,7 +92,7 @@ public static class TournamentsInfo
             _ => throw new ArgumentException($"Campeonato '{tournament}' não encontrado")
         };
     }
-    // ✅ NOVO: Lista todos os torneios configurados
+
     public static class AllTournaments
     {
         public static readonly List<(int tournamentId, int seasonId, int totalRounds, string name, string country)> List = new()
@@ -109,6 +106,7 @@ public static class TournamentsInfo
             (ChampionsLeague.TournamentId, ChampionsLeague.SeasonId, 13, ChampionsLeague.Name, "Europa")
         };
     }
+
     public static int? GetSeasonIdByTournament(int tournamentId)
     {
         return tournamentId switch
@@ -123,7 +121,7 @@ public static class TournamentsInfo
             _ => null
         };
     }
-    // ✅ NOVO: Busca TotalRounds pelo TournamentId
+
     public static int? GetTotalRoundsByTournament(int tournamentId)
     {
         return tournamentId switch
@@ -137,6 +135,7 @@ public static class TournamentsInfo
             _ => null
         };
     }
+
     public static readonly HashSet<int> MonitoredIds = new()
     {
         PremierLeague.TournamentId,
