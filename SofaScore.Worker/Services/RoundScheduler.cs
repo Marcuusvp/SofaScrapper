@@ -144,12 +144,12 @@ public class RoundScheduler
 
         // ✅ Pegar o timestamp da rodada 8 (última rodada da fase de liga)
         var leaguePhaseEndTimestamp = await _db.Matches
-            .Where(m => m.TournamentId == tournamentId && 
-                    m.SeasonId == seasonId && 
-                    m.Round == TournamentsInfo.ChampionsLeague.LeaguePhaseEnd)
-            .Select(m => m.StartTimestamp)
-            .DefaultIfEmpty(0)
-            .MaxAsync(ct);
+        .Where(m => m.TournamentId == tournamentId && 
+            m.SeasonId == seasonId && 
+            m.Round == TournamentsInfo.ChampionsLeague.LeaguePhaseEnd)
+        .OrderByDescending(m => m.StartTimestamp) // Ordena pelo maior
+        .Select(m => m.StartTimestamp)
+        .FirstOrDefaultAsync(ct); // Pega o primeiro ou 0 (default do long)
 
         // Se não encontrou rodada 8, usa timestamp zero (aceita qualquer jogo)
         // Isso garante que se não há fase de liga, considera tudo como fase eliminatória
