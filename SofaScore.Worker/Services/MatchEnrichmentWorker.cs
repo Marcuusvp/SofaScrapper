@@ -61,7 +61,7 @@ public class MatchEnrichmentWorker : BackgroundService
                     {
                         await SyncLiveMatchesAsync(dbContext, liveMatches, stoppingToken);
                     }
-
+                    await ProcessFinishedLiveMatchesAsync(scraper, dbContext, liveMatches, stoppingToken);
                     // --- FASE 2: ENRIQUECIMENTO PÓS-JOGO + STANDINGS ---
                     bool enrichedSomething = await EnrichFinishedMatchesAsync(scraper, dbContext, stoppingToken);
 
@@ -463,4 +463,44 @@ public class MatchEnrichmentWorker : BackgroundService
         }
         return list;
     }
+
+    private async Task ProcessFinishedLiveMatchesAsync(
+    SofaScraper scraper,
+    AppDbContext dbContext,
+    List<Match> currentLiveMatchesFromScraper,
+    CancellationToken ct)
+{
+    // Pega os IDs que o Scraper diz que estão ao vivo AGORA
+    var sourceLiveIds = currentLiveMatchesFromScraper.Select(m => m.Id).ToHashSet();
+
+    // Busca no NOSSO banco jogos que achamos que ainda estão rolando
+    // (Qualquer status que indique jogo em andamento)
+    var stuckMatches = await dbContext.Matches
+        .Where(m => m.ProcessingStatus == MatchProcessingStatus.InProgress 
+                 || m.Status == "Live" 
+                 || m.Status == "Inplay" // Adicione variações possíveis
+                 || m.Status == "1st half" 
+                 || m.Status == "2nd half" 
+                 || m.Status == "Halftime"
+                 || m.Status == "Extra time"
+                 || m.Status == "Penalties")
+        .ToListAsync(ct);
+
+    // O PULO DO GATO:
+    // Se está no banco como 'ao vivo', mas NÃO veio na lista do scraper, o jogo acabou!
+    var finishedMatches = stuckMatches
+        .Where(m => !sourceLiveIds.Contains(m.Id))
+        .ToList();
+
+    if (finishedMatches.Any())
+    {
+        _logger.LogInformation("🕵️ Detectados {Count} jogos que saíram do ao vivo. Finalizando...", finishedMatches.Count);
+
+        foreach (var match in finishedMatches)
+        {
+            // Força a atualização completa para pegar o status "Ended" e o placar final
+            await ProcessMatchAsync(scraper, dbContext, match, ct);
+        }
+    }
+}
 }

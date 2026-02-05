@@ -164,43 +164,109 @@ public class MatchesController : ControllerBase
     }
 
     /// <summary>
-    /// Retorna jogos do Playoff de qualificação da Champions League (Round ID fixo: 636).
+    /// Retorna jogos das fases eliminatórias (Mata-Mata).
+    /// Para as Oitavas (Round 5), valida dinamicamente se os Playoffs (Round 636) já terminaram.
     /// </summary>
-    [HttpGet("champions-league/playoff")]
-    public async Task<IActionResult> GetChampionsLeaguePlayoff()
+    [HttpGet("champions-league/playoff/{roundId}")]
+    public async Task<IActionResult> GetChampionsLeagueKnockout(int roundId)
     {
         try
         {
-            const int playoffRoundId = 636;
+            var validKnockoutIds = new[] { 636, 5, 27, 28, 29 };
+            
+            if (!validKnockoutIds.Contains(roundId))
+            {
+                return BadRequest(new { message = "ID de rodada inválido para fase eliminatória." });
+            }
 
+            // Lógica Especial para Ambiguidade do Round 5 (Oitavas vs Liga)
+            if (roundId == 5)
+            {
+                // 1. Busca os jogos dos Playoffs (Round 636) para usar como referência
+                var playoffMatches = await _db.Matches
+                    .Where(m => 
+                        m.TournamentId == TournamentsInfo.ChampionsLeague.TournamentId && 
+                        m.SeasonId == TournamentsInfo.ChampionsLeague.SeasonId && 
+                        m.Round == 636)
+                    .ToListAsync();
+
+                // 2. Valida se os Playoffs já foram FINALIZADOS
+                // Consideramos finalizado se existem jogos E todos estão com status de encerrado
+                // Adicione outros status de encerramento se necessário (ex: "Finished", "AET", "AP")
+                bool isPlayoffFinished = playoffMatches.Any() && 
+                                         playoffMatches.All(m => m.Status == "Ended" || m.Status == "Finished");
+
+                if (!isPlayoffFinished)
+                {
+                    // Se o playoff não acabou, as Oitavas ainda não estão definidas (ou não deveriam ser mostradas)
+                    return Ok(new
+                    {
+                        message = "As Oitavas de Final serão definidas após o término da fase de Playoffs.",
+                        tournament = TournamentsInfo.ChampionsLeague.Name,
+                        round = roundId,
+                        matches = Array.Empty<MatchResponse>()
+                    });
+                }
+
+                // 3. Pega a data do último jogo do Playoff
+                var lastPlayoffDate = playoffMatches.Max(m => m.StartTimestamp);
+
+                // 4. Busca jogos do Round 5 que acontecem DEPOIS do último jogo do playoff
+                // Isso filtra automaticamente os jogos da Fase de Liga (Round 5) que ocorreram meses antes
+                var matchesR16 = await _db.Matches
+                    .Where(m => 
+                        m.TournamentId == TournamentsInfo.ChampionsLeague.TournamentId && 
+                        m.SeasonId == TournamentsInfo.ChampionsLeague.SeasonId && 
+                        m.Round == roundId &&
+                        m.StartTimestamp > lastPlayoffDate)
+                    .OrderBy(m => m.StartTimestamp)
+                    .ToListAsync();
+
+                if (!matchesR16.Any())
+                {
+                    return Ok(new
+                    {
+                        message = "Confrontos das Oitavas de Final ainda não definidos.",
+                        tournament = TournamentsInfo.ChampionsLeague.Name,
+                        round = roundId,
+                        matches = Array.Empty<MatchResponse>()
+                    });
+                }
+
+                return Ok(matchesR16.Select(m => m.ToResponse(TournamentsInfo.ChampionsLeague.Name)));
+            }
+
+            // --- Lógica Padrão para Outras Fases (636, 27, 28, 29) ---
+            // Essas fases não possuem conflito de ID com a fase de liga
             var matches = await _db.Matches
                 .Where(m => 
                     m.TournamentId == TournamentsInfo.ChampionsLeague.TournamentId && 
                     m.SeasonId == TournamentsInfo.ChampionsLeague.SeasonId && 
-                    m.Round == playoffRoundId)
+                    m.Round == roundId)
                 .OrderBy(m => m.StartTimestamp)
                 .ToListAsync();
 
             if (!matches.Any())
             {
+                var phaseName = TournamentsInfo.ChampionsLeague.KnockoutPhases
+                    .FirstOrDefault(p => p.RoundId == roundId)?.Name ?? "Fase Eliminatória";
+
                 return Ok(new
                 {
-                    message = "Nenhum jogo encontrado para Champions League - Playoff de Qualificação.",
+                    message = $"Nenhum jogo encontrado para {phaseName}.",
                     tournament = TournamentsInfo.ChampionsLeague.Name,
-                    round = playoffRoundId,
+                    round = roundId,
                     matches = Array.Empty<MatchResponse>()
                 });
             }
 
-            var response = matches.Select(m => m.ToResponse(TournamentsInfo.ChampionsLeague.Name)).ToList();
-            return Ok(response);
+            return Ok(matches.Select(m => m.ToResponse(TournamentsInfo.ChampionsLeague.Name)));
         }
         catch (Exception ex)
         {
             return StatusCode(500, new { error = ex.Message });
         }
     }
-
     /// <summary>
     /// Retorna detalhes completos de uma partida (stats + incidents).
     /// Apenas dados do banco - não faz scraping.
