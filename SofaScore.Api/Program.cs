@@ -40,6 +40,11 @@ builder.Services.AddScoped<SofaScraper>(sp =>
 });
 var app = builder.Build();
 
+app.UseCors(x => x
+    .AllowAnyMethod()
+    .AllowAnyHeader()
+    .SetIsOriginAllowed(origin => true) // Permite qualquer origem
+    .AllowCredentials());
 // 5. Inicializações ao subir a API
 // Criar escopo para acessar serviços Scoped/Singleton na inicialização
 using (var scope = app.Services.CreateScope())
