@@ -464,43 +464,60 @@ public class MatchEnrichmentWorker : BackgroundService
         return list;
     }
 
+    // =================================================================================================
+    // FASE 1.5: Detecta jogos que estavam ao vivo no banco, mas sumiram da lista do scraper (acabaram)
+    // =================================================================================================
     private async Task ProcessFinishedLiveMatchesAsync(
-    SofaScraper scraper,
-    AppDbContext dbContext,
-    List<Match> currentLiveMatchesFromScraper,
-    CancellationToken ct)
-{
-    // Pega os IDs que o Scraper diz que estão ao vivo AGORA
-    var sourceLiveIds = currentLiveMatchesFromScraper.Select(m => m.Id).ToHashSet();
-
-    // Busca no NOSSO banco jogos que achamos que ainda estão rolando
-    // (Qualquer status que indique jogo em andamento)
-    var stuckMatches = await dbContext.Matches
-        .Where(m => m.ProcessingStatus == MatchProcessingStatus.InProgress 
-                 || m.Status == "Live" 
-                 || m.Status == "Inplay" // Adicione variações possíveis
-                 || m.Status == "1st half" 
-                 || m.Status == "2nd half" 
-                 || m.Status == "Halftime"
-                 || m.Status == "Extra time"
-                 || m.Status == "Penalties")
-        .ToListAsync(ct);
-
-    // O PULO DO GATO:
-    // Se está no banco como 'ao vivo', mas NÃO veio na lista do scraper, o jogo acabou!
-    var finishedMatches = stuckMatches
-        .Where(m => !sourceLiveIds.Contains(m.Id))
-        .ToList();
-
-    if (finishedMatches.Any())
+        SofaScraper scraper,
+        AppDbContext dbContext,
+        List<Match> currentLiveMatchesFromScraper,
+        CancellationToken ct)
     {
-        _logger.LogInformation("🕵️ Detectados {Count} jogos que saíram do ao vivo. Finalizando...", finishedMatches.Count);
+        // 1. Pega os IDs que o Scraper diz que estão ao vivo agora
+        var sourceLiveIds = currentLiveMatchesFromScraper.Select(m => m.Id).ToHashSet();
 
-        foreach (var match in finishedMatches)
+        // 2. Busca no banco todos os jogos que NÓS achamos que ainda estão rolando
+        var stuckMatches = await dbContext.Matches
+            .Where(m => m.ProcessingStatus == MatchProcessingStatus.InProgress 
+                     || m.Status == "Live" 
+                     || m.Status == "Inplay" 
+                     || m.Status == "1st half" 
+                     || m.Status == "2nd half" 
+                     || m.Status == "Halftime"
+                     || m.Status == "Extra time"
+                     || m.Status == "Penalties")
+            .ToListAsync(ct);
+
+        // 3. Filtra: Se está no banco como Live, mas NÃO está na lista do Scraper, o jogo acabou.
+        var finishedMatches = stuckMatches
+            .Where(m => !sourceLiveIds.Contains(m.Id))
+            .ToList();
+
+        if (finishedMatches.Any())
         {
-            // Força a atualização completa para pegar o status "Ended" e o placar final
-            await ProcessMatchAsync(scraper, dbContext, match, ct);
+            _logger.LogInformation("🕵️ FASE 1.5: Detectados {Count} jogos que saíram do ao vivo. Finalizando...", finishedMatches.Count);
+
+            // ✅ LISTA PARA ATUALIZAR TABELA
+            var tournamentIdsToSync = new HashSet<int>();
+
+            foreach (var match in finishedMatches)
+            {
+                // Força o enriquecimento completo
+                bool success = await ProcessMatchAsync(scraper, dbContext, match, ct);
+                
+                // Se atualizou com sucesso, marca o campeonato para atualizar a tabela
+                if (success)
+                {
+                    tournamentIdsToSync.Add(match.TournamentId);
+                }
+            }
+
+            // ✅ ATUALIZAÇÃO DE TABELA (STANDINGS)
+            // Igualzinho à Fase 2, garante que a tabela reflita o jogo que acabou de sair do limbo
+            foreach (var tournamentId in tournamentIdsToSync)
+            {
+                await SyncStandingsAsync(scraper, dbContext, tournamentId, ct);
+            }
         }
     }
-}
 }
