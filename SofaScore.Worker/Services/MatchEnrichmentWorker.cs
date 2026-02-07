@@ -1,14 +1,23 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using SofaScore.Shared.Data;
 using SofaScore.Shared.Services;
 using SofaScoreScraper;
 
 namespace SofaScore.Worker.Services;
 
+public class WorkerSettings
+{
+    public bool EnableDeepSleep { get; set; } = true;
+    public int DeepSleepIntervalMinutes { get; set; } = 8;
+    public int PreGameWakeupMinutes { get; set; } = 15;
+}
+
 public class MatchEnrichmentWorker : BackgroundService
 {
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<MatchEnrichmentWorker> _logger;
+    private readonly WorkerSettings _settings;
     
     // Configurações de tempo
     private readonly TimeSpan _activeDelay = TimeSpan.FromMinutes(2);   // Ciclo rápido (jogos ao vivo)
@@ -17,17 +26,28 @@ public class MatchEnrichmentWorker : BackgroundService
     
     private TimeSpan _currentDelay;
     private DateTime _lastRoundCheck = DateTime.MinValue;
+    
+    // Deep Sleep - variável que armazena o próximo jogo
+    private DateTime? _nextGameStartTime = null;
 
-    public MatchEnrichmentWorker(IServiceProvider serviceProvider, ILogger<MatchEnrichmentWorker> logger)
+    public MatchEnrichmentWorker(
+        IServiceProvider serviceProvider, 
+        ILogger<MatchEnrichmentWorker> logger,
+        IOptions<WorkerSettings> settings)
     {
         _serviceProvider = serviceProvider;
         _logger = logger;
+        _settings = settings.Value;
         _currentDelay = _activeDelay;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _logger.LogInformation("🚀 Smart Worker v7.0: Live Sync + Enrichment + Standings + Round Scheduler");
+        _logger.LogInformation("🚀 Smart Worker v8.0: Live Sync + Enrichment + Standings + Round Scheduler + Deep Sleep");
+        _logger.LogInformation("⚙️  Deep Sleep: {Status} | Interval: {Minutes}min | Pre-Game Wakeup: {Wakeup}min", 
+            _settings.EnableDeepSleep ? "ENABLED" : "DISABLED",
+            _settings.DeepSleepIntervalMinutes,
+            _settings.PreGameWakeupMinutes);
 
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -35,8 +55,23 @@ public class MatchEnrichmentWorker : BackgroundService
             {
                 await using (var scope = _serviceProvider.CreateAsyncScope())
                 {
-                    var scraper = scope.ServiceProvider.GetRequiredService<SofaScraper>();
                     var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+                    // --- DEEP SLEEP CHECK ---
+                    if (_settings.EnableDeepSleep && await ShouldEnterDeepSleepAsync(dbContext, stoppingToken))
+                    {
+                        var deepSleepDelay = TimeSpan.FromMinutes(_settings.DeepSleepIntervalMinutes);
+                        
+                        _logger.LogInformation("😴 Deep Sleep ativado. Próximo jogo inicia em: {NextGame}. Acordando em {Minutes}min...", 
+                            _nextGameStartTime?.ToString("dd/MM/yyyy HH:mm:ss") ?? "N/A",
+                            _settings.DeepSleepIntervalMinutes);
+                        
+                        await Task.Delay(deepSleepDelay, stoppingToken);
+                        continue; // Volta ao início do loop sem executar scraping
+                    }
+
+                    // --- EXECUÇÃO NORMAL DO WORKER ---
+                    var scraper = scope.ServiceProvider.GetRequiredService<SofaScraper>();
                     var roundScheduler = scope.ServiceProvider.GetRequiredService<RoundScheduler>();
 
                     // --- FASE 0: LIMPEZA DE ZUMBIS ---
@@ -62,6 +97,7 @@ public class MatchEnrichmentWorker : BackgroundService
                         await SyncLiveMatchesAsync(dbContext, liveMatches, stoppingToken);
                     }
                     await ProcessFinishedLiveMatchesAsync(scraper, dbContext, liveMatches, stoppingToken);
+                    
                     // --- FASE 2: ENRIQUECIMENTO PÓS-JOGO + STANDINGS ---
                     bool enrichedSomething = await EnrichFinishedMatchesAsync(scraper, dbContext, stoppingToken);
 
@@ -91,6 +127,45 @@ public class MatchEnrichmentWorker : BackgroundService
 
             await Task.Delay(_currentDelay, stoppingToken);
         }
+    }
+
+    // =================================================================================================
+    // DEEP SLEEP: Verifica se deve entrar em modo de economia extrema
+    // =================================================================================================
+    private async Task<bool> ShouldEnterDeepSleepAsync(AppDbContext dbContext, CancellationToken ct)
+    {
+        var now = DateTime.UtcNow;
+        var nowTimestamp = new DateTimeOffset(now).ToUnixTimeSeconds();
+        
+        // Query mais barata possível: apenas ID e timestamp do próximo jogo
+        var nextMatch = await dbContext.Matches
+            .Where(m => m.StartTimestamp > nowTimestamp && 
+                       m.ProcessingStatus != MatchProcessingStatus.Cancelled)
+            .OrderBy(m => m.StartTimestamp)
+            .Select(m => new { m.Id, m.StartTimestamp })
+            .FirstOrDefaultAsync(ct);
+
+        if (nextMatch == null)
+        {
+            _logger.LogDebug("🔍 Deep Sleep Check: Nenhum jogo futuro encontrado no banco.");
+            _nextGameStartTime = null;
+            return false; // Sem jogos futuros, executa normalmente
+        }
+
+        var nextGameTime = DateTimeOffset.FromUnixTimeSeconds(nextMatch.StartTimestamp).UtcDateTime;
+        _nextGameStartTime = nextGameTime;
+
+        var timeUntilGame = nextGameTime - now;
+        var wakeupThreshold = TimeSpan.FromMinutes(_settings.PreGameWakeupMinutes);
+
+        // Se o jogo está longe (mais de X minutos), pode hibernar profundamente
+        if (timeUntilGame > wakeupThreshold)
+        {
+            return true; // Entra em deep sleep
+        }
+
+        _logger.LogInformation("⏰ Próximo jogo em {Minutes} minutos. Modo ativo.", timeUntilGame.TotalMinutes);
+        return false; // Jogo próximo, executa normalmente
     }
 
     // =================================================================================================
