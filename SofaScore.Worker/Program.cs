@@ -12,7 +12,13 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 
 Console.WriteLine("✅ DbContext registrado");
 
-// 2. Registrar SofaScraper
+// 2. Configurar WorkerSettings
+builder.Services.Configure<WorkerSettings>(
+    builder.Configuration.GetSection("WorkerSettings"));
+
+Console.WriteLine("✅ WorkerSettings configurado");
+
+// 3. Registrar SofaScraper
 builder.Services.AddScoped<SofaScraper>(sp =>
 {
     var logger = sp.GetRequiredService<ILogger<SofaScraper>>();
@@ -21,19 +27,19 @@ builder.Services.AddScoped<SofaScraper>(sp =>
 
 Console.WriteLine("✅ SofaScraper registrado");
 
-// 3. Registrar RoundScheduler
+// 4. Registrar RoundScheduler
 builder.Services.AddScoped<RoundScheduler>();
 
 Console.WriteLine("✅ RoundScheduler registrado");
 
-// 4. Registrar o Worker
+// 5. Registrar o Worker
 builder.Services.AddHostedService<MatchEnrichmentWorker>();
 
 Console.WriteLine("✅ MatchEnrichmentWorker registrado");
 
 var host = builder.Build();
 
-// 5. Garantir criação do banco ao iniciar
+// 6. Garantir criação do banco ao iniciar
 using (var scope = host.Services.CreateScope())
 {
     var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
