@@ -57,6 +57,36 @@ public class MatchEnrichmentWorker : BackgroundService
                 {
                     var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
+                    // --- DIAGNÓSTICO: Mostra próximos jogos (apenas em debug) ---
+                    if (_logger.IsEnabled(LogLevel.Debug))
+                    {
+                        var nowTimestamp = new DateTimeOffset(DateTime.UtcNow).ToUnixTimeSeconds();
+                        var upcomingGames = await dbContext.Matches
+                            .Where(m => m.StartTimestamp > nowTimestamp &&
+                                       m.ProcessingStatus != MatchProcessingStatus.Cancelled &&
+                                       m.ProcessingStatus != MatchProcessingStatus.Enriched)
+                            .OrderBy(m => m.StartTimestamp)
+                            .Take(5)
+                            .Select(m => new { 
+                                m.StartTimestamp, 
+                                m.HomeTeam, 
+                                m.AwayTeam,
+                                Time = DateTimeOffset.FromUnixTimeSeconds(m.StartTimestamp).UtcDateTime
+                            })
+                            .ToListAsync(stoppingToken);
+
+                        if (upcomingGames.Any())
+                        {
+                            _logger.LogDebug("📋 Próximos 5 jogos:");
+                            foreach (var g in upcomingGames)
+                            {
+                                var minutesUntil = (g.Time - DateTime.UtcNow).TotalMinutes;
+                                _logger.LogDebug("   → {Home} vs {Away} em {Minutes:F0} min (UTC: {Time:HH:mm})",
+                                    g.HomeTeam, g.AwayTeam, minutesUntil, g.Time);
+                            }
+                        }
+                    }
+
                     // --- DEEP SLEEP CHECK ---
                     if (_settings.EnableDeepSleep && await ShouldEnterDeepSleepAsync(dbContext, stoppingToken))
                     {
@@ -138,11 +168,15 @@ public class MatchEnrichmentWorker : BackgroundService
         var nowTimestamp = new DateTimeOffset(now).ToUnixTimeSeconds();
         
         // Query mais barata possível: apenas ID e timestamp do próximo jogo
+        // Busca jogos que ainda não começaram E não estão cancelados/finalizados
         var nextMatch = await dbContext.Matches
             .Where(m => m.StartTimestamp > nowTimestamp && 
-                       m.ProcessingStatus != MatchProcessingStatus.Cancelled)
+                       m.ProcessingStatus != MatchProcessingStatus.Cancelled &&
+                       m.ProcessingStatus != MatchProcessingStatus.Enriched &&
+                       m.Status != "Ended" &&
+                       m.Status != "Finished")
             .OrderBy(m => m.StartTimestamp)
-            .Select(m => new { m.Id, m.StartTimestamp })
+            .Select(m => new { m.Id, m.StartTimestamp, m.HomeTeam, m.AwayTeam })
             .FirstOrDefaultAsync(ct);
 
         if (nextMatch == null)
@@ -158,13 +192,18 @@ public class MatchEnrichmentWorker : BackgroundService
         var timeUntilGame = nextGameTime - now;
         var wakeupThreshold = TimeSpan.FromMinutes(_settings.PreGameWakeupMinutes);
 
+        // Log detalhado para debugging
+        _logger.LogDebug("🔍 Deep Sleep Check: Próximo jogo = {Home} vs {Away} em {Minutes:F1} minutos (UTC: {GameTime})",
+            nextMatch.HomeTeam, nextMatch.AwayTeam, timeUntilGame.TotalMinutes, nextGameTime.ToString("yyyy-MM-dd HH:mm:ss"));
+
         // Se o jogo está longe (mais de X minutos), pode hibernar profundamente
         if (timeUntilGame > wakeupThreshold)
         {
             return true; // Entra em deep sleep
         }
 
-        _logger.LogInformation("⏰ Próximo jogo em {Minutes} minutos. Modo ativo.", timeUntilGame.TotalMinutes);
+        _logger.LogInformation("⏰ Próximo jogo em {Minutes:F1} minutos ({Home} vs {Away}). Modo ativo.", 
+            timeUntilGame.TotalMinutes, nextMatch.HomeTeam, nextMatch.AwayTeam);
         return false; // Jogo próximo, executa normalmente
     }
 
