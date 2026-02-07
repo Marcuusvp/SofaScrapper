@@ -162,7 +162,7 @@ public class MatchEnrichmentWorker : BackgroundService
     // =================================================================================================
     // DEEP SLEEP: Verifica se deve entrar em modo de economia extrema
     // =================================================================================================
-    private async Task<bool> ShouldEnterDeepSleepAsync(AppDbContext dbContext, CancellationToken ct)
+    private async Task<bool> ShouldEnterDeepSleepAsync(AppDbContext dbContext, CancellationToken stoppingToken)
     {
         var now = DateTime.UtcNow;
         var nowTimestamp = new DateTimeOffset(now).ToUnixTimeSeconds();
@@ -177,7 +177,7 @@ public class MatchEnrichmentWorker : BackgroundService
                        m.Status != "Finished")
             .OrderBy(m => m.StartTimestamp)
             .Select(m => new { m.Id, m.StartTimestamp, m.HomeTeam, m.AwayTeam })
-            .FirstOrDefaultAsync(ct);
+            .FirstOrDefaultAsync(stoppingToken);
 
         if (nextMatch == null)
         {

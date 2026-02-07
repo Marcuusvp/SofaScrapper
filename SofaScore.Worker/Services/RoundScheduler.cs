@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using SofaScore.Shared.Data;
 using SofaScore.Shared.Services;
+using SofaScore.Shared.Utils;
 using SofaScoreScraper;
 
 namespace SofaScore.Worker.Services;
@@ -274,7 +275,7 @@ public class RoundScheduler
                     HomeScore = match.HomeScore ?? 0,
                     AwayScore = match.AwayScore ?? 0,
                     Status = match.Status,
-                    StartTimestamp = match.StartTimestamp,
+                    StartTimestamp = TimestampHelper.FixSofaScoreTimestamp(match.StartTimestamp),
                     ProcessingStatus = match.Status switch
                     {
                         "Live" or "Inplay" => MatchProcessingStatus.InProgress,
@@ -328,7 +329,7 @@ public class RoundScheduler
                     HomeScore = match.HomeScore ?? 0,
                     AwayScore = match.AwayScore ?? 0,
                     Status = match.Status,
-                    StartTimestamp = match.StartTimestamp,
+                    StartTimestamp = TimestampHelper.FixSofaScoreTimestamp(match.StartTimestamp),
                     ProcessingStatus = match.Status switch
                     {
                         "Live" or "Inplay" => MatchProcessingStatus.InProgress,
@@ -432,7 +433,7 @@ public class RoundScheduler
                     HomeScore = match.HomeScore ?? 0,
                     AwayScore = match.AwayScore ?? 0,
                     Status = match.Status,
-                    StartTimestamp = match.StartTimestamp,
+                    StartTimestamp = TimestampHelper.FixSofaScoreTimestamp(match.StartTimestamp),
                     ProcessingStatus = match.Status switch
                     {
                         "Live" or "Inplay" => MatchProcessingStatus.InProgress,
