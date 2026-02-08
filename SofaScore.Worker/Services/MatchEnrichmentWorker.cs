@@ -8,7 +8,7 @@ namespace SofaScore.Worker.Services;
 
 public class WorkerSettings
 {
-    public bool EnableDeepSleep { get; set; } = true;
+    public bool EnableDeepSleep { get; set; } = false;
     public int DeepSleepIntervalMinutes { get; set; } = 8;
     public int PreGameWakeupMinutes { get; set; } = 15;
 }
