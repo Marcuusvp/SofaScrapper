@@ -21,7 +21,7 @@ public class MatchEnrichmentWorker : BackgroundService
     
     // Configurações de tempo
     private readonly TimeSpan _activeDelay = TimeSpan.FromMinutes(2);   // Ciclo rápido (jogos ao vivo)
-    private readonly TimeSpan _idleDelay = TimeSpan.FromMinutes(10);    // Ciclo de hibernação
+    private readonly TimeSpan _idleDelay = TimeSpan.FromMinutes(9);    // Ciclo de hibernação
     private readonly TimeSpan _roundCheckInterval = TimeSpan.FromHours(6); // Checa próxima rodada a cada 6h
     
     private TimeSpan _currentDelay;
