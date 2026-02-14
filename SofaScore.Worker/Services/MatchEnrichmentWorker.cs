@@ -1,56 +1,36 @@
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Options;
 using SofaScore.Shared.Data;
 using SofaScore.Shared.Services;
 using SofaScoreScraper;
 
 namespace SofaScore.Worker.Services;
 
-public class WorkerSettings
-{
-    public bool EnableDeepSleep { get; set; } = false;
-    public int DeepSleepIntervalMinutes { get; set; } = 5;
-    public int PreGameWakeupMinutes { get; set; } = 20;
-}
-
 public class MatchEnrichmentWorker : BackgroundService
 {
     private readonly IServiceProvider _serviceProvider;
     private readonly ILogger<MatchEnrichmentWorker> _logger;
-    private readonly WorkerSettings _settings;
     
-    // Configurações de tempo
-    private readonly TimeSpan _activeDelay = TimeSpan.FromMinutes(2);   // Ciclo rápido (jogos ao vivo)
-    private readonly TimeSpan _idleDelay = TimeSpan.FromMinutes(9);    // Ciclo de hibernação
-    private readonly TimeSpan _roundCheckInterval = TimeSpan.FromHours(6); // Checa próxima rodada a cada 6h
+    private readonly TimeSpan _activeDelay = TimeSpan.FromMinutes(2);
+    private readonly TimeSpan _idleDelay = TimeSpan.FromMinutes(9);
+    private readonly TimeSpan _roundCheckInterval = TimeSpan.FromHours(6);
     
     private TimeSpan _currentDelay;
     private DateTime _lastRoundCheck = DateTime.MinValue;
     
-    // Deep Sleep - variável que armazena o próximo jogo
-    private DateTime? _nextGameStartTime = null;
-    
-    // Controle de recuperação inicial
     private bool _hasPerformedInitialRecovery = false;
 
     public MatchEnrichmentWorker(
         IServiceProvider serviceProvider, 
-        ILogger<MatchEnrichmentWorker> logger,
-        IOptions<WorkerSettings> settings)
+        ILogger<MatchEnrichmentWorker> logger)
     {
         _serviceProvider = serviceProvider;
         _logger = logger;
-        _settings = settings.Value;
         _currentDelay = _activeDelay;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _logger.LogInformation("🚀 Smart Worker v8.0: Live Sync + Enrichment + Standings + Round Scheduler + Deep Sleep");
-        _logger.LogInformation("⚙️  Deep Sleep: {Status} | Interval: {Minutes}min | Pre-Game Wakeup: {Wakeup}min", 
-            _settings.EnableDeepSleep ? "ENABLED" : "DISABLED",
-            _settings.DeepSleepIntervalMinutes,
-            _settings.PreGameWakeupMinutes);
+        _logger.LogInformation("🚀 Smart Worker v9.0: Live Sync + Enrichment + Standings + Round Scheduler");
 
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -90,19 +70,6 @@ public class MatchEnrichmentWorker : BackgroundService
                                     g.HomeTeam, g.AwayTeam, minutesUntil, g.Time);
                             }
                         }
-                    }
-
-                    // --- DEEP SLEEP CHECK ---
-                    if (_settings.EnableDeepSleep && _hasPerformedInitialRecovery && await ShouldEnterDeepSleepAsync(dbContext, stoppingToken))
-                    {
-                        var deepSleepDelay = TimeSpan.FromMinutes(_settings.DeepSleepIntervalMinutes);
-                        
-                        _logger.LogInformation("😴 Deep Sleep ativado. Próximo jogo inicia em: {NextGame}. Acordando em {Minutes}min...", 
-                            _nextGameStartTime?.ToString("dd/MM/yyyy HH:mm:ss") ?? "N/A",
-                            _settings.DeepSleepIntervalMinutes);
-                        
-                        await Task.Delay(deepSleepDelay, stoppingToken);
-                        continue;
                     }
 
                     var scraper = scope.ServiceProvider.GetRequiredService<SofaScraper>();
@@ -169,54 +136,6 @@ public class MatchEnrichmentWorker : BackgroundService
 
             await Task.Delay(_currentDelay, stoppingToken);
         }
-    }
-
-    // =================================================================================================
-    // DEEP SLEEP: Verifica se deve entrar em modo de economia extrema
-    // =================================================================================================
-    private async Task<bool> ShouldEnterDeepSleepAsync(AppDbContext dbContext, CancellationToken stoppingToken)
-    {
-        var now = DateTime.UtcNow;
-        var nowTimestamp = new DateTimeOffset(now).ToUnixTimeSeconds();
-        
-        // Query mais barata possível: apenas ID e timestamp do próximo jogo
-        // Busca jogos que ainda não começaram E não estão cancelados/finalizados
-        var nextMatch = await dbContext.Matches
-            .Where(m => m.StartTimestamp > nowTimestamp && 
-                       m.ProcessingStatus != MatchProcessingStatus.Cancelled &&
-                       m.ProcessingStatus != MatchProcessingStatus.Enriched &&
-                       m.Status != "Ended" &&
-                       m.Status != "Finished")
-            .OrderBy(m => m.StartTimestamp)
-            .Select(m => new { m.Id, m.StartTimestamp, m.HomeTeam, m.AwayTeam })
-            .FirstOrDefaultAsync(stoppingToken);
-
-        if (nextMatch == null)
-        {
-            _logger.LogDebug("🔍 Deep Sleep Check: Nenhum jogo futuro encontrado no banco.");
-            _nextGameStartTime = null;
-            return false; // Sem jogos futuros, executa normalmente
-        }
-
-        var nextGameTime = DateTimeOffset.FromUnixTimeSeconds(nextMatch.StartTimestamp).UtcDateTime;
-        _nextGameStartTime = nextGameTime;
-
-        var timeUntilGame = nextGameTime - now;
-        var wakeupThreshold = TimeSpan.FromMinutes(_settings.PreGameWakeupMinutes);
-
-        // Log detalhado para debugging
-        _logger.LogDebug("🔍 Deep Sleep Check: Próximo jogo = {Home} vs {Away} em {Minutes:F1} minutos (UTC: {GameTime})",
-            nextMatch.HomeTeam, nextMatch.AwayTeam, timeUntilGame.TotalMinutes, nextGameTime.ToString("yyyy-MM-dd HH:mm:ss"));
-
-        // Se o jogo está longe (mais de X minutos), pode hibernar profundamente
-        if (timeUntilGame > wakeupThreshold)
-        {
-            return true; // Entra em deep sleep
-        }
-
-        _logger.LogInformation("⏰ Próximo jogo em {Minutes:F1} minutos ({Home} vs {Away}). Modo ativo.", 
-            timeUntilGame.TotalMinutes, nextMatch.HomeTeam, nextMatch.AwayTeam);
-        return false; // Jogo próximo, executa normalmente
     }
 
     // =================================================================================================

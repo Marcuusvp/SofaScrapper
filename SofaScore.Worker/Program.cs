@@ -10,11 +10,6 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 
 Console.WriteLine("✅ DbContext registrado");
 
-builder.Services.Configure<WorkerSettings>(
-    builder.Configuration.GetSection("WorkerSettings"));
-
-Console.WriteLine("✅ WorkerSettings configurado");
-
 builder.Services.AddScoped<SofaScraper>(sp =>
 {
     var logger = sp.GetRequiredService<ILogger<SofaScraper>>();
