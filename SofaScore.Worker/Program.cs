@@ -3,22 +3,18 @@ using SofaScore.Shared.Services;
 using Microsoft.EntityFrameworkCore;
 using SofaScore.Worker.Services;
 
-var builder = Host.CreateApplicationBuilder(args);
+var builder = WebApplication.CreateBuilder(args);
 
-// 1. Configurar Banco de Dados
-var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
 builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseNpgsql(connectionString));
+    options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
 
 Console.WriteLine("✅ DbContext registrado");
 
-// 2. Configurar WorkerSettings
 builder.Services.Configure<WorkerSettings>(
     builder.Configuration.GetSection("WorkerSettings"));
 
 Console.WriteLine("✅ WorkerSettings configurado");
 
-// 3. Registrar SofaScraper
 builder.Services.AddScoped<SofaScraper>(sp =>
 {
     var logger = sp.GetRequiredService<ILogger<SofaScraper>>();
@@ -27,25 +23,38 @@ builder.Services.AddScoped<SofaScraper>(sp =>
 
 Console.WriteLine("✅ SofaScraper registrado");
 
-// 4. Registrar RoundScheduler
 builder.Services.AddScoped<RoundScheduler>();
 
 Console.WriteLine("✅ RoundScheduler registrado");
 
-// 5. Registrar o Worker
 builder.Services.AddHostedService<MatchEnrichmentWorker>();
 
 Console.WriteLine("✅ MatchEnrichmentWorker registrado");
 
-var host = builder.Build();
+var app = builder.Build();
 
-// 6. Garantir criação do banco ao iniciar
-using (var scope = host.Services.CreateScope())
+app.MapGet("/health", () => Results.Ok(new { status = "healthy", timestamp = DateTime.UtcNow }));
+
+app.MapGet("/ready", async (AppDbContext db) =>
+{
+    try
+    {
+        await db.Database.CanConnectAsync();
+        return Results.Ok(new { status = "ready", timestamp = DateTime.UtcNow });
+    }
+    catch
+    {
+        return Results.StatusCode(503);
+    }
+});
+
+using (var scope = app.Services.CreateScope())
 {
     var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
     await context.Database.EnsureCreatedAsync();
     Console.WriteLine("✅ Banco de dados conectado/criado.");
 }
 
-Console.WriteLine("🚀 Worker iniciando...");
-host.Run();
+var port = Environment.GetEnvironmentVariable("PORT") ?? "5000";
+Console.WriteLine($"🚀 Worker iniciando na porta {port}...");
+app.Run($"http://0.0.0.0:{port}");

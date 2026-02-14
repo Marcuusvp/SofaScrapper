@@ -9,8 +9,9 @@ namespace SofaScore.Worker.Services;
 public class WorkerSettings
 {
     public bool EnableDeepSleep { get; set; } = false;
-    public int DeepSleepIntervalMinutes { get; set; } = 8;
-    public int PreGameWakeupMinutes { get; set; } = 15;
+    public int DeepSleepIntervalMinutes { get; set; } = 5;
+    public int PreGameWakeupMinutes { get; set; } = 20;
+    public int OfflineRecoveryHours { get; set; } = 48;
 }
 
 public class MatchEnrichmentWorker : BackgroundService
@@ -29,6 +30,9 @@ public class MatchEnrichmentWorker : BackgroundService
     
     // Deep Sleep - variável que armazena o próximo jogo
     private DateTime? _nextGameStartTime = null;
+    
+    // Controle de recuperação inicial
+    private bool _hasPerformedInitialRecovery = false;
 
     public MatchEnrichmentWorker(
         IServiceProvider serviceProvider, 
@@ -51,6 +55,8 @@ public class MatchEnrichmentWorker : BackgroundService
 
         while (!stoppingToken.IsCancellationRequested)
         {
+            _logger.LogDebug("💓 Worker heartbeat: {Time}", DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss"));
+            
             try
             {
                 await using (var scope = _serviceProvider.CreateAsyncScope())
@@ -97,12 +103,19 @@ public class MatchEnrichmentWorker : BackgroundService
                             _settings.DeepSleepIntervalMinutes);
                         
                         await Task.Delay(deepSleepDelay, stoppingToken);
-                        continue; // Volta ao início do loop sem executar scraping
+                        continue;
                     }
 
-                    // --- EXECUÇÃO NORMAL DO WORKER ---
                     var scraper = scope.ServiceProvider.GetRequiredService<SofaScraper>();
                     var roundScheduler = scope.ServiceProvider.GetRequiredService<RoundScheduler>();
+
+                    // --- FASE -1: RECUPERAÇÃO DE OFFLINE ---
+                    if (!_hasPerformedInitialRecovery)
+                    {
+                        _logger.LogInformation("🔄 FASE -1: Recuperação de jogos perdidos durante offline...");
+                        await RecoverMissedMatchesAsync(scraper, dbContext, stoppingToken);
+                        _hasPerformedInitialRecovery = true;
+                    }
 
                     // --- FASE 0: LIMPEZA DE ZUMBIS ---
                     await RemoveZombieMatchesAsync(dbContext, stoppingToken);
@@ -205,6 +218,43 @@ public class MatchEnrichmentWorker : BackgroundService
         _logger.LogInformation("⏰ Próximo jogo em {Minutes:F1} minutos ({Home} vs {Away}). Modo ativo.", 
             timeUntilGame.TotalMinutes, nextMatch.HomeTeam, nextMatch.AwayTeam);
         return false; // Jogo próximo, executa normalmente
+    }
+
+    // =================================================================================================
+    // FASE -1: Recuperação de jogos perdidos durante período offline
+    // =================================================================================================
+    private async Task RecoverMissedMatchesAsync(SofaScraper scraper, AppDbContext dbContext, CancellationToken ct)
+    {
+        var nowTimestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        var cutoffTimestamp = DateTimeOffset.UtcNow.AddHours(-_settings.OfflineRecoveryHours).ToUnixTimeSeconds();
+
+        var missedMatches = await dbContext.Matches
+            .Where(m => m.StartTimestamp < nowTimestamp
+                     && m.StartTimestamp >= cutoffTimestamp
+                     && m.ProcessingStatus != MatchProcessingStatus.Enriched
+                     && m.ProcessingStatus != MatchProcessingStatus.Cancelled)
+            .OrderBy(m => m.StartTimestamp)
+            .Take(20)
+            .ToListAsync(ct);
+
+        if (!missedMatches.Any())
+        {
+            _logger.LogInformation("✅ FASE -1: Nenhum jogo perdido encontrado.");
+            return;
+        }
+
+        _logger.LogInformation("🔄 FASE -1: Encontrados {Count} jogos perdidos. Processando...", missedMatches.Count);
+
+        await scraper.InitializeAsync();
+
+        foreach (var match in missedMatches)
+        {
+            _logger.LogInformation("🔄 FASE -1: Recuperando {Home} vs {Away} (Status: {Status}, ProcStatus: {PStatus})...",
+                match.HomeTeam, match.AwayTeam, match.Status, match.ProcessingStatus);
+            await ProcessMatchAsync(scraper, dbContext, match, ct);
+        }
+
+        _logger.LogInformation("✅ FASE -1: Recuperação concluída.");
     }
 
     // =================================================================================================
