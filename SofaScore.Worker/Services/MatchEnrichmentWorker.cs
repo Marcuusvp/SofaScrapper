@@ -11,7 +11,6 @@ public class WorkerSettings
     public bool EnableDeepSleep { get; set; } = false;
     public int DeepSleepIntervalMinutes { get; set; } = 5;
     public int PreGameWakeupMinutes { get; set; } = 20;
-    public int OfflineRecoveryHours { get; set; } = 48;
 }
 
 public class MatchEnrichmentWorker : BackgroundService
@@ -223,16 +222,15 @@ public class MatchEnrichmentWorker : BackgroundService
     // =================================================================================================
     // FASE -1: Recuperação de jogos perdidos durante período offline
     // =================================================================================================
-    private async Task RecoverMissedMatchesAsync(SofaScraper scraper, AppDbContext dbContext, CancellationToken ct)
+private async Task RecoverMissedMatchesAsync(SofaScraper scraper, AppDbContext dbContext, CancellationToken ct)
     {
         var nowTimestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-        var cutoffTimestamp = DateTimeOffset.UtcNow.AddHours(-_settings.OfflineRecoveryHours).ToUnixTimeSeconds();
 
         var missedMatches = await dbContext.Matches
             .Where(m => m.StartTimestamp < nowTimestamp
-                     && m.StartTimestamp >= cutoffTimestamp
                      && m.ProcessingStatus != MatchProcessingStatus.Enriched
-                     && m.ProcessingStatus != MatchProcessingStatus.Cancelled)
+                     && m.ProcessingStatus != MatchProcessingStatus.Cancelled
+                     && m.ProcessingStatus != MatchProcessingStatus.InProgress)
             .OrderBy(m => m.StartTimestamp)
             .Take(20)
             .ToListAsync(ct);
@@ -459,17 +457,17 @@ public class MatchEnrichmentWorker : BackgroundService
     // =================================================================================================
     // FASE 3: Limbo — jogos que ficaram presos em status indefinido
     // =================================================================================================
-    private async Task ProcessLimboMatches(SofaScraper scraper, AppDbContext dbContext, CancellationToken ct)
+private async Task ProcessLimboMatches(SofaScraper scraper, AppDbContext dbContext, CancellationToken ct)
     {
-        long cutoffTimestamp = DateTimeOffset.UtcNow.AddHours(-3).ToUnixTimeSeconds();
+        long cutoffTimestamp = DateTimeOffset.UtcNow.AddHours(-2).ToUnixTimeSeconds();
         var limboMatches = await dbContext.Matches
-            .Where(m => (m.Status == "Not started" || m.Status == "Postponed")
-                        && m.StartTimestamp < cutoffTimestamp
+            .Where(m => m.StartTimestamp < cutoffTimestamp
                         && m.ProcessingStatus != MatchProcessingStatus.Enriched
                         && m.ProcessingStatus != MatchProcessingStatus.Cancelled
+                        && m.ProcessingStatus != MatchProcessingStatus.InProgress
                         && m.ProcessingStatus != MatchProcessingStatus.Postponed)
             .OrderBy(m => m.StartTimestamp)
-            .Take(5)
+            .Take(10)
             .ToListAsync(ct);
 
         if (limboMatches.Any())
