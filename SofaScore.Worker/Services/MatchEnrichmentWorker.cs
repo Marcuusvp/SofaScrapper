@@ -94,7 +94,7 @@ public class MatchEnrichmentWorker : BackgroundService
                     }
 
                     // --- DEEP SLEEP CHECK ---
-                    if (_settings.EnableDeepSleep && await ShouldEnterDeepSleepAsync(dbContext, stoppingToken))
+                    if (_settings.EnableDeepSleep && _hasPerformedInitialRecovery && await ShouldEnterDeepSleepAsync(dbContext, stoppingToken))
                     {
                         var deepSleepDelay = TimeSpan.FromMinutes(_settings.DeepSleepIntervalMinutes);
                         
