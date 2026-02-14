@@ -150,8 +150,9 @@ public async Task InitializeAsync()
         {
             await page.GoToAsync("https://www.sofascore.com/", new NavigationOptions { Timeout = 60000, WaitUntil = new[] { WaitUntilNavigation.DOMContentLoaded } });
             
-            var apiUrl = "https://www.sofascore.com/api/v1/sport/football/events/live";
+var apiUrl = "https://www.sofascore.com/api/v1/sport/football/events/live";
             var json = await FetchJsonFromPage(page, apiUrl);
+            if (string.IsNullOrEmpty(json)) return new List<Match>();
 
             var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
             var response = JsonSerializer.Deserialize<ApiResponse>(json, options);
