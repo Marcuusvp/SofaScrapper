@@ -11,7 +11,7 @@ public class MatchEnrichmentWorker : BackgroundService
     private readonly ILogger<MatchEnrichmentWorker> _logger;
     
     private readonly TimeSpan _activeDelay = TimeSpan.FromMinutes(2);
-    private readonly TimeSpan _idleDelay = TimeSpan.FromMinutes(9);
+    private readonly TimeSpan _idleDelay = TimeSpan.FromMinutes(8);
     private readonly TimeSpan _roundCheckInterval = TimeSpan.FromHours(6);
     
     private TimeSpan _currentDelay;
